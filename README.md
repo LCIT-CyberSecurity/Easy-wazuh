@@ -241,11 +241,13 @@ sudo ufw allow from 192.168.1.0/24 to any port 1515 proto tcp
 
 Avoid exposing ports `9200` and `55000` to untrusted networks.
 
-## HTTPS certificate
+## Certificates
 
-The default Wazuh Docker setup uses self-signed certificates. Browsers will usually display a security warning for this certificate.
+The Wazuh Docker stack requires certificates to secure communication between Wazuh components. This installer uses the official `wazuh-certs-generator` Docker image to generate Wazuh self-signed certificates for the single-node stack.
 
-For production usage, or to avoid browser warnings, install TLS certificates issued by a certificate authority trusted by browsers.
+Browsers will usually display a security warning when accessing the Wazuh dashboard with these self-signed certificates.
+
+For any environment beyond a PoC, review the official Wazuh certificate documentation and use certificates issued by an internal or public certificate authority trusted by your organization and browsers. Do not treat the generated PoC certificates as production-ready material.
 
 ## Default credentials
 
@@ -254,7 +256,11 @@ Username: admin
 Password: SecretPassword
 ```
 
-Change all default Wazuh passwords after the first login and before any production usage. Default credentials are suitable only for an initial lab installation.
+These are the default Wazuh Docker dashboard credentials documented by Wazuh for the initial login.
+
+Default credentials are suitable only for an initial PoC/lab installation. Change the dashboard password and review all default Wazuh Docker credentials before connecting real endpoints or exposing the service to other users.
+
+The Wazuh Docker stack also contains internal service credentials used by the Wazuh API, indexer, and dashboard integrations. Review the official Wazuh password change procedure instead of changing only the dashboard password manually.
 
 Follow the official Wazuh documentation for password changes:
 
