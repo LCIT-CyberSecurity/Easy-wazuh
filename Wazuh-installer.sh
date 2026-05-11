@@ -6,6 +6,12 @@ echo "=================================================="
 echo " Wazuh Docker installation script"
 echo "=================================================="
 echo ""
+echo "Scope:"
+echo "  This installer deploys a Wazuh single-node Docker stack for PoC/lab use."
+echo "  Single-node means the Wazuh manager, indexer, and dashboard run on the"
+echo "  same Docker host/workload."
+echo "  This installer is not intended for production deployments."
+echo ""
 
 if [ "$EUID" -ne 0 ]; then
   echo "Error: this script must be run as root."
@@ -202,6 +208,7 @@ done
 echo ""
 echo "Selected mode: $INSTALL_MODE_LABEL"
 echo "Wazuh version: $WAZUH_VERSION"
+echo "Deployment: single-node PoC/lab only, not production"
 echo ""
 
 read -r -p "Continue with this installation mode? [y/N]: " CONFIRM_INSTALL

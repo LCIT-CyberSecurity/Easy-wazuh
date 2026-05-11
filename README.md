@@ -1,6 +1,18 @@
 # Easy-wazuh
 
-Setup a full Wazuh service easily on a Debian host with Docker.
+Setup a Wazuh single-node service easily on a Debian host with Docker.
+
+## Scope
+
+This project installs a **Wazuh single-node Docker stack** for a proof of concept (PoC), lab, or evaluation environment.
+
+Single-node means that all Wazuh central components run on the same Docker host and the same workload:
+
+- Wazuh manager
+- Wazuh indexer
+- Wazuh dashboard
+
+This setup is **not intended for production**. It does not provide high availability, workload separation, or the resilience expected from a production Wazuh deployment. For production, use an architecture sized and reviewed for your agent count, event volume, retention requirements, backup strategy, certificate management, access control, and operational constraints.
 
 ## Prerequisites
 
@@ -12,7 +24,7 @@ Setup a full Wazuh service easily on a Debian host with Docker.
 
 ## Machine specifications
 
-For a simple Wazuh Docker single-node installation, use at least:
+For a simple Wazuh Docker single-node PoC installation, use at least:
 
 ```text
 CPU:      4 vCPU
@@ -22,7 +34,7 @@ OS:       Debian 13, 64-bit
 Network:  Static IP address recommended
 ```
 
-For a more comfortable lab or small internal deployment:
+For a more comfortable lab or small internal PoC deployment:
 
 ```text
 CPU:      4 to 8 vCPU
@@ -32,7 +44,7 @@ OS:       Debian 13, 64-bit
 Network:  Static IP address or stable DNS name
 ```
 
-For a deployment expected to evolve with more agents, longer retention, or heavier event volume:
+For a PoC expected to evolve with more agents, longer retention, or heavier event volume:
 
 ```text
 CPU:      8 vCPU or more
@@ -42,7 +54,7 @@ OS:       Debian 13, 64-bit
 Network:  Static IP address and DNS record
 ```
 
-The official Wazuh Docker documentation gives the baseline for a single-node stack as 4 CPU cores, 8 GB RAM, and 50 GB disk. Plan more disk space if you keep logs and security events for a long time.
+The official Wazuh Docker documentation gives the baseline for a single-node stack as 4 CPU cores, 8 GB RAM, and 50 GB disk. Plan more disk space if you keep logs and security events for a long time. These profiles are PoC-oriented starting points, not production sizing guidance.
 
 ## Official documentation
 
@@ -84,7 +96,7 @@ At startup, the script asks which installation mode to use:
 2) Existing Docker environment - keep current Docker installation
 ```
 
-The script asks for confirmation before continuing with the selected mode. It also asks for a final confirmation before starting the Wazuh containers.
+The script asks for confirmation before continuing with the selected mode. It also asks for a final confirmation before starting the Wazuh containers. The script explicitly reminds the user that this is a single-node PoC deployment, not a production deployment.
 
 In fresh Debian mode, the script installs Docker, configures the Wazuh indexer kernel requirement, clones the official Wazuh Docker repository, generates self-signed certificates, starts the single-node stack, and prints the access information at the end.
 
