@@ -1,4 +1,4 @@
-# Easy-wazuh
+# Easy-wazuh - Wazuh Single Node PoC Installer
 
 Setup a Wazuh single-node service easily on a Debian host with Docker.
 
@@ -12,7 +12,19 @@ Single-node means that all Wazuh central components run on the same Docker host 
 - Wazuh indexer
 - Wazuh dashboard
 
-This setup is **not intended for production**. It does not provide high availability, workload separation, or the resilience expected from a production Wazuh deployment. For production, use an architecture sized and reviewed for your agent count, event volume, retention requirements, backup strategy, certificate management, access control, and operational constraints.
+## Disclaimer
+
+This installer is provided for a **Wazuh single-node proof of concept only**. It is not intended for production use.
+
+Before designing or deploying a production Wazuh environment, you must evaluate the expected log transaction rate, usually expressed as events/logs per second, the required processing load, retention period, indexed data volume, number of agents, alerting use cases, and peak ingestion scenarios.
+
+In production, Wazuh components should be separated so each layer can absorb the required load:
+
+- Wazuh manager nodes for agent connections, event analysis, rules, and active response.
+- Wazuh indexer nodes for indexing, search, storage, and retention.
+- Wazuh dashboard nodes for user access and visualization.
+
+This single-node setup does not provide high availability, workload separation, or the resilience expected from a production Wazuh deployment. Separating components makes it possible to scale, tune, monitor, back up, and maintain each layer independently.
 
 ## Prerequisites
 
