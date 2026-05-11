@@ -70,6 +70,10 @@ The official Wazuh Docker documentation gives the baseline for a single-node sta
 
 ## Official documentation
 
+Official Wazuh documentation:
+
+<https://documentation.wazuh.com/current/>
+
 The official Wazuh Docker deployment documentation is available here:
 
 <https://documentation.wazuh.com/current/deployment-options/docker/wazuh-container.html>
