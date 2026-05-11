@@ -14,7 +14,7 @@ Single-node means that all Wazuh central components run on the same Docker host 
 
 ## Disclaimer
 
-This installer is provided for a **Wazuh single-node proof of concept only**. It is not intended for production use.
+<p><strong><font color="red">Wazuh single-node proof of concept only. It is not intended for production use.</font></strong></p>
 
 Before designing or deploying a production Wazuh environment, you must evaluate the expected log transaction rate, usually expressed as events/logs per second, the required processing load, retention period, indexed data volume, number of agents, alerting use cases, and peak ingestion scenarios.
 
