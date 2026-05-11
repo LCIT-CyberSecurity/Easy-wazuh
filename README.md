@@ -28,7 +28,7 @@ This single-node setup does not provide high availability, workload separation, 
 
 ## Prerequisites
 
-- A Debian 13 machine.
+- A Debian 13 machine, or an existing Docker environment correctly sized for a Wazuh single-node PoC.
 - A user account with sudo privileges.
 - A stable internet connection for Docker image downloads and Wazuh image pulls.
 - Network access from the Wazuh server to the endpoints you want to monitor.
