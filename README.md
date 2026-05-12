@@ -188,15 +188,23 @@ This is the only DNS record required by this PoC Docker deployment. Use the cust
 
 When the `Three named components` topology is selected, `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01` are Docker service/container names inside the Docker network. They do not require public DNS records for this single-VM deployment.
 
-The Wazuh certificate generator requires DNS values with a domain suffix. For the named component topology, the script uses internal Docker aliases for TLS:
+The Wazuh certificate generator requires DNS values with a domain suffix. For the named component topology, the script asks for an internal TLS DNS suffix. By default, it uses the domain part of the VM hostname when available, otherwise it uses `local`.
+
+For example, if the suffix is `lab.example`, the internal Docker TLS aliases are:
 
 ```text
-wazuh-indexer01.local
-wazuh-manager01.local
-wazuh-dashboard01.local
+wazuh-indexer01.lab.example
+wazuh-manager01.lab.example
+wazuh-dashboard01.lab.example
 ```
 
-These names are Docker network aliases only. They do not require public DNS records.
+The suffix can also be provided non-interactively:
+
+```bash
+sudo WAZUH_INTERNAL_DNS_SUFFIX=lab.example WAZUH_PUBLIC_FQDN=wazuh.lab.example ./Wazuh-installer.sh
+```
+
+These names are Docker network aliases only. They do not require public DNS records unless the deployment is redesigned later for multiple VMs.
 
 Internal Wazuh component traffic stays inside the Docker network and uses the selected service names. This means the public FQDN is for users and agents reaching the VM, not for dashboard-to-indexer or manager-to-indexer communication.
 

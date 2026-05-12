@@ -31,6 +31,7 @@ WAZUH_DASHBOARD_NODE="wazuh.dashboard"
 WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE"
 WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE"
 WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE"
+WAZUH_INTERNAL_DNS_SUFFIX="${WAZUH_INTERNAL_DNS_SUFFIX:-}"
 DEPLOYMENT_TOPOLOGY=""
 DEPLOYMENT_TOPOLOGY_LABEL=""
 USE_FIXED_CONTAINER_NAMES="no"
@@ -94,6 +95,12 @@ is_valid_fqdn() {
   return 0
 }
 
+is_valid_dns_suffix() {
+  local VALUE="$1"
+
+  is_valid_fqdn "host.$VALUE"
+}
+
 is_valid_public_endpoint() {
   local VALUE="$1"
 
@@ -104,6 +111,24 @@ resolve_first_ipv4() {
   local NAME="$1"
 
   getent ahostsv4 "$NAME" 2>/dev/null | awk '{print $1; exit}'
+}
+
+host_dns_suffix() {
+  local DETECTED_FQDN="$1"
+
+  if [[ "$DETECTED_FQDN" == *.* ]]; then
+    echo "${DETECTED_FQDN#*.}"
+  else
+    echo "local"
+  fi
+}
+
+set_named_component_dns_names() {
+  local DNS_SUFFIX="$1"
+
+  WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE.$DNS_SUFFIX"
+  WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE.$DNS_SUFFIX"
+  WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE.$DNS_SUFFIX"
 }
 
 prompt_public_endpoint() {
@@ -141,6 +166,45 @@ prompt_public_endpoint() {
   done
 }
 
+prompt_internal_dns_suffix() {
+  local DETECTED_FQDN="$1"
+  local DEFAULT_SUFFIX
+  local ENTERED_SUFFIX
+
+  if [ "$USE_FIXED_CONTAINER_NAMES" != "yes" ]; then
+    return 0
+  fi
+
+  DEFAULT_SUFFIX="$(host_dns_suffix "$DETECTED_FQDN")"
+  if ! is_valid_dns_suffix "$DEFAULT_SUFFIX"; then
+    DEFAULT_SUFFIX="local"
+  fi
+
+  while true; do
+    if [ -n "$WAZUH_INTERNAL_DNS_SUFFIX" ]; then
+      ENTERED_SUFFIX="$WAZUH_INTERNAL_DNS_SUFFIX"
+    else
+      read -r -p "Internal TLS DNS suffix for Docker components [$DEFAULT_SUFFIX]: " ENTERED_SUFFIX
+      if [ -z "$ENTERED_SUFFIX" ]; then
+        ENTERED_SUFFIX="$DEFAULT_SUFFIX"
+      fi
+    fi
+
+    if is_valid_dns_suffix "$ENTERED_SUFFIX"; then
+      WAZUH_INTERNAL_DNS_SUFFIX="$ENTERED_SUFFIX"
+      set_named_component_dns_names "$WAZUH_INTERNAL_DNS_SUFFIX"
+      return 0
+    fi
+
+    echo "Invalid DNS suffix: $ENTERED_SUFFIX"
+    echo "Use a DNS suffix such as local, lab.example, or customer.example."
+
+    if [ -n "$WAZUH_INTERNAL_DNS_SUFFIX" ]; then
+      exit 1
+    fi
+  done
+}
+
 select_deployment_topology() {
   echo "Wazuh Docker topology:"
   echo "  1) Official Wazuh Docker names - default service/container names"
@@ -167,9 +231,7 @@ select_deployment_topology() {
         WAZUH_INDEXER_NODE="wazuh-indexer01"
         WAZUH_MANAGER_NODE="wazuh-manager01"
         WAZUH_DASHBOARD_NODE="wazuh-dashboard01"
-        WAZUH_INDEXER_DNS="wazuh-indexer01.local"
-        WAZUH_MANAGER_DNS="wazuh-manager01.local"
-        WAZUH_DASHBOARD_DNS="wazuh-dashboard01.local"
+        set_named_component_dns_names "local"
         USE_FIXED_CONTAINER_NAMES="yes"
         break
         ;;
@@ -638,6 +700,17 @@ echo "Detected IP:   $SERVER_IP"
 echo "Mode:          $INSTALL_MODE_LABEL"
 echo "Topology:      $DEPLOYMENT_TOPOLOGY_LABEL"
 echo ""
+
+prompt_internal_dns_suffix "$SERVER_FQDN"
+
+if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
+  echo "Internal TLS DNS suffix: $WAZUH_INTERNAL_DNS_SUFFIX"
+  echo "Internal TLS DNS names:"
+  echo "  Indexer:   $WAZUH_INDEXER_DNS"
+  echo "  Manager:   $WAZUH_MANAGER_DNS"
+  echo "  Dashboard: $WAZUH_DASHBOARD_DNS"
+  echo ""
+fi
 
 prompt_public_endpoint "$SERVER_FQDN" "$SERVER_IP"
 
