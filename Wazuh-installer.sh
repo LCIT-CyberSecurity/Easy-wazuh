@@ -478,6 +478,17 @@ rewrite_wazuh_node_names() {
       "$FILE"
   done
 
+  # Filebeat, the manager indexer connector, and dashboard indexer clients
+  # must use the same DNS name as the indexer certificate SAN. Using only the
+  # Docker service name can resolve correctly but fail TLS verification with:
+  # "certificate is valid for <fqdn>, not <service>".
+  sed -i \
+    -e "s#https://$WAZUH_INDEXER_NODE:9200#https://$WAZUH_INDEXER_DNS:9200#g" \
+    -e "s#https://wazuh[.]indexer:9200#https://$WAZUH_INDEXER_DNS:9200#g" \
+    "$COMPOSE_FILE" \
+    "$STACK_DIR/config/wazuh_cluster/wazuh_manager.conf" \
+    "$STACK_DIR/config/wazuh_dashboard/opensearch_dashboards.yml"
+
   if [ "$INDEXER_CONFIG_SOURCE" != "$INDEXER_CONFIG_TARGET" ]; then
     if [ -d "$INDEXER_CONFIG_TARGET" ]; then
       echo "Error: $INDEXER_CONFIG_TARGET exists as a directory."
@@ -493,6 +504,26 @@ rewrite_wazuh_node_names() {
     fi
 
     mv "$INDEXER_CONFIG_SOURCE" "$INDEXER_CONFIG_TARGET"
+  fi
+}
+
+assert_named_component_indexer_tls_target() {
+  local FILE
+  local BAD_MATCHES=""
+
+  for FILE in \
+    "$COMPOSE_FILE" \
+    "$STACK_DIR/config/wazuh_cluster/wazuh_manager.conf" \
+    "$STACK_DIR/config/wazuh_dashboard/opensearch_dashboards.yml"; do
+    if grep -Eq "https://($WAZUH_INDEXER_NODE|wazuh[.]indexer):9200" "$FILE"; then
+      BAD_MATCHES="$BAD_MATCHES $FILE"
+    fi
+  done
+
+  if [ -n "$BAD_MATCHES" ]; then
+    echo "Error: indexer TLS endpoints were not rewritten to $WAZUH_INDEXER_DNS."
+    echo "Files with unsafe indexer endpoints:$BAD_MATCHES"
+    exit 1
   fi
 }
 
@@ -970,6 +1001,7 @@ if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
   rewrite_wazuh_node_names
   ensure_named_component_network_aliases
   ensure_compose_container_names
+  assert_named_component_indexer_tls_target
 fi
 
 assert_single_node_compose_services "$COMPOSE_FILE"
@@ -1109,9 +1141,59 @@ wait_for_service() {
   done
 }
 
+validate_named_component_indexer_flow() {
+  local MANAGER_CONTAINER="$WAZUH_MANAGER_NODE"
+  local INDEXER_ENDPOINT="https://$WAZUH_INDEXER_DNS:9200"
+  local LOG_CHECK
+
+  if [ "$USE_FIXED_CONTAINER_NAMES" != "yes" ]; then
+    return 0
+  fi
+
+  echo ""
+  echo "Validating named component DNS and TLS indexer flow..."
+
+  echo "Checking manager DNS resolution for $WAZUH_INDEXER_DNS..."
+  docker exec "$MANAGER_CONTAINER" getent hosts "$WAZUH_INDEXER_DNS" >/dev/null
+
+  echo "Checking manager ossec.conf indexer endpoint..."
+  docker exec "$MANAGER_CONTAINER" grep -q "$INDEXER_ENDPOINT" /var/ossec/etc/ossec.conf
+
+  echo "Checking Filebeat configuration..."
+  docker exec "$MANAGER_CONTAINER" filebeat test config >/dev/null
+
+  echo "Checking Filebeat TLS output..."
+  docker exec "$MANAGER_CONTAINER" filebeat test output | tee /tmp/easy-wazuh-filebeat-output.log
+  if ! grep -q "handshake.*OK" /tmp/easy-wazuh-filebeat-output.log; then
+    echo "Error: Filebeat TLS handshake validation did not report OK."
+    exit 1
+  fi
+
+  echo "Checking recent manager logs for indexer TLS/connectivity errors..."
+  LOG_CHECK="$(docker logs --tail=300 "$MANAGER_CONTAINER" 2>&1 | grep -E "No available server|bad_certificate|IndexerConnector initialization failed|certificate is valid for" || true)"
+  if [ -n "$LOG_CHECK" ]; then
+    echo "Error: manager logs still contain indexer connectivity or TLS errors:"
+    echo "$LOG_CHECK"
+    exit 1
+  fi
+
+  echo "Checking indexer API from the Docker host..."
+  if ! curl -fsSk -u admin:SecretPassword "https://localhost:9200" >/dev/null; then
+    echo "Error: Wazuh indexer API did not respond on https://localhost:9200."
+    exit 1
+  fi
+
+  echo "Current Wazuh indexer indices, if any:"
+  curl -sk -u admin:SecretPassword "https://localhost:9200/_cat/indices/wazuh-*?v" || true
+
+  echo "Named component indexer DNS/TLS flow is valid."
+}
+
 wait_for_service "$WAZUH_INDEXER_NODE"
 wait_for_service "$WAZUH_MANAGER_NODE"
 wait_for_service "$WAZUH_DASHBOARD_NODE"
+
+validate_named_component_indexer_flow
 
 echo ""
 echo "Current container status:"

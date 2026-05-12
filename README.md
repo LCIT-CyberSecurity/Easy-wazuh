@@ -230,6 +230,14 @@ These names are Docker network aliases only. They do not require public DNS reco
 
 Internal Wazuh component traffic stays inside the Docker network and uses the selected service names. This means the public FQDN is for users and agents reaching the VM, not for dashboard-to-indexer or manager-to-indexer communication.
 
+For named components, the manager, Filebeat, and dashboard indexer clients must use the same internal indexer DNS name that appears in the indexer certificate SAN. For example:
+
+```text
+https://wazuh-indexer01.lab.example:9200
+```
+
+Using only the Docker service name, such as `https://wazuh-indexer01:9200`, can resolve correctly but still fail TLS verification because the certificate is issued for the internal FQDN. The installer rewrites the generated Wazuh configuration to use the internal TLS DNS name and validates Filebeat output after startup.
+
 If certificates already exist under `/opt/wazuh/wazuh-docker/single-node/config/wazuh_indexer_ssl_certs`, the script keeps them only when they match the selected topology and public endpoint metadata. If you change topology or FQDN between runs, move the existing certificate directory away before generating new certificates.
 
 ## Docker safety checks
