@@ -201,6 +201,23 @@ check_public_endpoint_resolution() {
   echo "Public endpoint DNS check: $ENDPOINT resolves to $RESOLVED_IP"
 }
 
+print_wazuh_connection_summary() {
+  echo "Wazuh connection summary:"
+  echo "  Dashboard URL:        https://$PUBLIC_ENDPOINT"
+  echo "  Agent events TCP:     $PUBLIC_ENDPOINT:1514"
+  echo "  Agent enrollment TCP: $PUBLIC_ENDPOINT:1515"
+  echo "  Syslog UDP:           $PUBLIC_ENDPOINT:514"
+  echo "  Manager API HTTPS:    https://$PUBLIC_ENDPOINT:55000"
+  echo "  Indexer API HTTPS:    https://$PUBLIC_ENDPOINT:9200"
+  echo "  Access depends on DNS, routing, and firewall rules."
+  echo "  Do not expose 55000 or 9200 to untrusted networks."
+  echo ""
+  echo "Internal Docker component names:"
+  echo "  Indexer:   $WAZUH_INDEXER_NODE"
+  echo "  Manager:   $WAZUH_MANAGER_NODE"
+  echo "  Dashboard: $WAZUH_DASHBOARD_NODE"
+}
+
 write_wazuh_certificate_config() {
   local CERT_CONFIG_FILE="$1"
   local DASHBOARD_ENDPOINT="$2"
@@ -592,6 +609,8 @@ prompt_public_endpoint "$SERVER_FQDN" "$SERVER_IP"
 echo "Public endpoint for clients: $PUBLIC_ENDPOINT"
 check_public_endpoint_resolution "$PUBLIC_ENDPOINT" "$SERVER_IP"
 echo ""
+print_wazuh_connection_summary
+echo ""
 
 if [ "$INSTALL_DOCKER" = "yes" ]; then
   guard_fresh_install_against_existing_docker
@@ -884,6 +903,8 @@ echo ""
 echo "Wazuh dashboard should be available at:"
 echo ""
 echo "  https://$PUBLIC_ENDPOINT"
+echo ""
+print_wazuh_connection_summary
 echo ""
 echo "Deployed topology:"
 echo "  $DEPLOYMENT_TOPOLOGY_LABEL"
