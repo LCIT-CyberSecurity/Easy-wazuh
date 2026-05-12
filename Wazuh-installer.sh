@@ -7,9 +7,10 @@ echo " Wazuh Docker installation script"
 echo "=================================================="
 echo ""
 echo "Scope:"
-echo "  This installer deploys a Wazuh single-node Docker stack for PoC/lab use."
-echo "  Single-node means the Wazuh manager, indexer, and dashboard run on the"
-echo "  same Docker host/workload."
+echo "  This installer deploys a Wazuh Docker stack on one Docker host/VM"
+echo "  for PoC/lab use."
+echo "  The stack uses three separate Wazuh component images and containers:"
+echo "  manager, indexer, and dashboard."
 echo "  The installer can keep the official single-node service names, or rename"
 echo "  the three component containers for clearer lab deployments."
 echo "  This installer is not intended for production deployments."
@@ -27,6 +28,9 @@ WAZUH_PORTS=(443 1514 1515 514 55000 9200)
 WAZUH_INDEXER_NODE="wazuh.indexer"
 WAZUH_MANAGER_NODE="wazuh.manager"
 WAZUH_DASHBOARD_NODE="wazuh.dashboard"
+WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE"
+WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE"
+WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE"
 DEPLOYMENT_TOPOLOGY=""
 DEPLOYMENT_TOPOLOGY_LABEL=""
 USE_FIXED_CONTAINER_NAMES="no"
@@ -139,7 +143,7 @@ prompt_public_endpoint() {
 
 select_deployment_topology() {
   echo "Wazuh Docker topology:"
-  echo "  1) Single-node official stack - Wazuh default service names"
+  echo "  1) Official Wazuh Docker names - default service/container names"
   echo "  2) Three named components - manager, indexer, dashboard as separate containers/images"
   echo ""
 
@@ -148,10 +152,13 @@ select_deployment_topology() {
 
     case "$DEPLOYMENT_TOPOLOGY" in
       1)
-        DEPLOYMENT_TOPOLOGY_LABEL="Single-node official stack"
+        DEPLOYMENT_TOPOLOGY_LABEL="Official Wazuh Docker names"
         WAZUH_INDEXER_NODE="wazuh.indexer"
         WAZUH_MANAGER_NODE="wazuh.manager"
         WAZUH_DASHBOARD_NODE="wazuh.dashboard"
+        WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE"
+        WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE"
+        WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE"
         USE_FIXED_CONTAINER_NAMES="no"
         break
         ;;
@@ -160,6 +167,9 @@ select_deployment_topology() {
         WAZUH_INDEXER_NODE="wazuh-indexer01"
         WAZUH_MANAGER_NODE="wazuh-manager01"
         WAZUH_DASHBOARD_NODE="wazuh-dashboard01"
+        WAZUH_INDEXER_DNS="wazuh-indexer01.local"
+        WAZUH_MANAGER_DNS="wazuh-manager01.local"
+        WAZUH_DASHBOARD_DNS="wazuh-dashboard01.local"
         USE_FIXED_CONTAINER_NAMES="yes"
         break
         ;;
@@ -216,6 +226,10 @@ print_wazuh_connection_summary() {
   echo "  Indexer:   $WAZUH_INDEXER_NODE"
   echo "  Manager:   $WAZUH_MANAGER_NODE"
   echo "  Dashboard: $WAZUH_DASHBOARD_NODE"
+  echo "Internal TLS DNS names:"
+  echo "  Indexer:   $WAZUH_INDEXER_DNS"
+  echo "  Manager:   $WAZUH_MANAGER_DNS"
+  echo "  Dashboard: $WAZUH_DASHBOARD_DNS"
 }
 
 write_wazuh_certificate_config() {
@@ -227,18 +241,18 @@ nodes:
   # Internal Docker service name used by Wazuh manager and dashboard.
   indexer:
     - name: $WAZUH_INDEXER_NODE
-      ip: $WAZUH_INDEXER_NODE
+      ip: $WAZUH_INDEXER_DNS
 
   # Internal Docker service name used by Filebeat/API integrations.
   server:
     - name: $WAZUH_MANAGER_NODE
-      ip: $WAZUH_MANAGER_NODE
+      ip: $WAZUH_MANAGER_DNS
 
   # Public endpoint used by browsers. This keeps the dashboard certificate
   # aligned with each client's FQDN while preserving the expected file names.
   dashboard:
     - name: $WAZUH_DASHBOARD_NODE
-      ip: $DASHBOARD_ENDPOINT
+      ip: $WAZUH_DASHBOARD_DNS
 EOF
 }
 
@@ -269,7 +283,7 @@ certificates_match_selected_topology() {
 }
 
 expected_certificate_metadata() {
-  echo "indexer=$WAZUH_INDEXER_NODE;manager=$WAZUH_MANAGER_NODE;dashboard=$WAZUH_DASHBOARD_NODE;endpoint=$PUBLIC_ENDPOINT"
+  echo "indexer=$WAZUH_INDEXER_NODE;indexer_dns=$WAZUH_INDEXER_DNS;manager=$WAZUH_MANAGER_NODE;manager_dns=$WAZUH_MANAGER_DNS;dashboard=$WAZUH_DASHBOARD_NODE;dashboard_dns=$WAZUH_DASHBOARD_DNS;endpoint=$PUBLIC_ENDPOINT"
 }
 
 certificate_metadata_matches() {
@@ -310,6 +324,23 @@ rewrite_wazuh_node_names() {
       -e "s/wazuh[.]dashboard/$WAZUH_DASHBOARD_NODE/g" \
       "$FILE"
   done
+}
+
+ensure_compose_network_aliases() {
+  local SERVICE="$1"
+  local DNS_ALIAS="$2"
+
+  if grep -Eq "^[[:space:]]+-[[:space:]]+$DNS_ALIAS$" "$COMPOSE_FILE"; then
+    return 0
+  fi
+
+  sed -i "/^[[:space:]]\\{2\\}${SERVICE}:/a\\    networks:\\n      default:\\n        aliases:\\n          - $DNS_ALIAS" "$COMPOSE_FILE"
+}
+
+ensure_named_component_network_aliases() {
+  ensure_compose_network_aliases "$WAZUH_INDEXER_NODE" "$WAZUH_INDEXER_DNS"
+  ensure_compose_network_aliases "$WAZUH_MANAGER_NODE" "$WAZUH_MANAGER_DNS"
+  ensure_compose_network_aliases "$WAZUH_DASHBOARD_NODE" "$WAZUH_DASHBOARD_DNS"
 }
 
 ensure_compose_container_name() {
@@ -562,7 +593,7 @@ done
 echo ""
 echo "Selected mode: $INSTALL_MODE_LABEL"
 echo "Wazuh version: $WAZUH_VERSION"
-echo "Deployment: single-node PoC/lab only, not production"
+echo "Deployment: one Docker host/VM PoC/lab only, not production"
 echo ""
 
 select_deployment_topology
@@ -573,6 +604,10 @@ echo "Docker service/container naming:"
 echo "  Indexer:   $WAZUH_INDEXER_NODE"
 echo "  Manager:   $WAZUH_MANAGER_NODE"
 echo "  Dashboard: $WAZUH_DASHBOARD_NODE"
+echo "Internal TLS DNS names:"
+echo "  Indexer:   $WAZUH_INDEXER_DNS"
+echo "  Manager:   $WAZUH_MANAGER_DNS"
+echo "  Dashboard: $WAZUH_DASHBOARD_DNS"
 echo ""
 
 read -r -p "Continue with this installation mode and topology? [y/N]: " CONFIRM_INSTALL
@@ -751,6 +786,7 @@ fi
 
 if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
   rewrite_wazuh_node_names
+  ensure_named_component_network_aliases
   ensure_compose_container_names
 fi
 
@@ -766,6 +802,10 @@ echo "Docker component names:"
 echo "  $WAZUH_INDEXER_NODE"
 echo "  $WAZUH_MANAGER_NODE"
 echo "  $WAZUH_DASHBOARD_NODE"
+echo "Internal TLS DNS names:"
+echo "  $WAZUH_INDEXER_DNS"
+echo "  $WAZUH_MANAGER_DNS"
+echo "  $WAZUH_DASHBOARD_DNS"
 if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
   echo "Fixed container names: enabled"
 else

@@ -1,12 +1,12 @@
-# Easy-wazuh - Wazuh Single Node PoC Installer
+# Easy-wazuh - Wazuh Docker PoC Installer
 
-Setup a Wazuh single-node service easily on a Debian host with Docker.
+Setup a Wazuh Docker PoC service easily on one Debian Docker host or VM.
 
 ## Scope
 
-This project installs a **Wazuh single-node Docker stack** for a proof of concept (PoC), lab, or evaluation environment.
+This project installs a **Wazuh Docker stack on one Docker host/VM** for a proof of concept (PoC), lab, or evaluation environment.
 
-Single-node means that all Wazuh central components run on the same Docker host and the same workload:
+The stack uses three separate Wazuh component images and containers on the same Docker host/VM:
 
 - Wazuh manager
 - Wazuh indexer
@@ -131,16 +131,16 @@ At startup, the script asks which installation mode to use:
 The script then asks which Wazuh Docker topology to use:
 
 ```text
-1) Single-node official stack - Wazuh default service names
+1) Official Wazuh Docker names - default service/container names
 2) Three named components - manager, indexer, dashboard as separate containers/images
 ```
 
 Both choices run the Wazuh manager, indexer, and dashboard on the same Docker host for PoC/lab use. The difference is naming:
 
-- `Single-node official stack` keeps the official service names: `wazuh.indexer`, `wazuh.manager`, and `wazuh.dashboard`.
+- `Official Wazuh Docker names` keeps the official service names: `wazuh.indexer`, `wazuh.manager`, and `wazuh.dashboard`.
 - `Three named components` rewrites the stack to use `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01` as service names and fixed container names. The manager, indexer, and dashboard keep their separate Wazuh Docker images.
 
-The script asks for confirmation before continuing with the selected mode and topology. It also asks for a final confirmation before starting the Wazuh containers. The script explicitly reminds the user that this is a single-node PoC deployment, not a production deployment.
+The script asks for confirmation before continuing with the selected mode and topology. It also asks for a final confirmation before starting the Wazuh containers. The script explicitly reminds the user that this is a one Docker host/VM PoC deployment, not a production deployment.
 
 In fresh Debian mode, the script installs Docker, configures the Wazuh indexer kernel requirement, clones the official Wazuh Docker repository, generates self-signed certificates, starts the single-node stack, and prints the access information at the end.
 
@@ -165,6 +165,16 @@ wazuh.lab.example  A/AAAA  <WAZUH_VM_IP>
 This is the only DNS record required by this PoC Docker deployment. Use the customer's real FQDN and VM IP address. The selected FQDN is what users enter in their browser and what agents can use to reach the Wazuh manager ports on the VM.
 
 When the `Three named components` topology is selected, `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01` are Docker service/container names inside the Docker network. They do not require public DNS records for this single-VM deployment.
+
+The Wazuh certificate generator requires DNS values with a domain suffix. For the named component topology, the script uses internal Docker aliases for TLS:
+
+```text
+wazuh-indexer01.local
+wazuh-manager01.local
+wazuh-dashboard01.local
+```
+
+These names are Docker network aliases only. They do not require public DNS records.
 
 Internal Wazuh component traffic stays inside the Docker network and uses the selected service names. This means the public FQDN is for users and agents reaching the VM, not for dashboard-to-indexer or manager-to-indexer communication.
 
