@@ -457,10 +457,12 @@ write_certificate_metadata() {
 
 rewrite_wazuh_node_names() {
   local FILE
+  local INDEXER_CONFIG_SOURCE="$STACK_DIR/config/wazuh_indexer/wazuh.indexer.yml"
+  local INDEXER_CONFIG_TARGET="$STACK_DIR/config/wazuh_indexer/$WAZUH_INDEXER_NODE.yml"
 
   for FILE in \
     "$COMPOSE_FILE" \
-    "$STACK_DIR/config/wazuh_indexer/wazuh.indexer.yml" \
+    "$INDEXER_CONFIG_SOURCE" \
     "$STACK_DIR/config/wazuh_dashboard/opensearch_dashboards.yml" \
     "$STACK_DIR/config/wazuh_dashboard/wazuh.yml"; do
     if [ ! -f "$FILE" ]; then
@@ -475,6 +477,23 @@ rewrite_wazuh_node_names() {
       -e "s/wazuh[.]dashboard/$WAZUH_DASHBOARD_NODE/g" \
       "$FILE"
   done
+
+  if [ "$INDEXER_CONFIG_SOURCE" != "$INDEXER_CONFIG_TARGET" ]; then
+    if [ -d "$INDEXER_CONFIG_TARGET" ]; then
+      echo "Error: $INDEXER_CONFIG_TARGET exists as a directory."
+      echo "This usually happens after Docker tried to bind-mount a missing file."
+      echo "Move the generated Wazuh Docker directory away before rerunning the installer."
+      exit 1
+    fi
+
+    if [ -e "$INDEXER_CONFIG_TARGET" ]; then
+      echo "Error: $INDEXER_CONFIG_TARGET already exists."
+      echo "Move the generated Wazuh Docker directory away before rerunning the installer."
+      exit 1
+    fi
+
+    mv "$INDEXER_CONFIG_SOURCE" "$INDEXER_CONFIG_TARGET"
+  fi
 }
 
 ensure_compose_network_aliases() {
