@@ -156,6 +156,16 @@ For repeatable VM tests, create or update DNS before deployment, or pass the exp
 sudo WAZUH_PUBLIC_FQDN=wazuh.lab.example ./Wazuh-installer.sh
 ```
 
+DNS requirements:
+
+```text
+wazuh.lab.example  A/AAAA  <WAZUH_VM_IP>
+```
+
+This is the only DNS record required by this PoC Docker deployment. Use the customer's real FQDN and VM IP address. The selected FQDN is what users enter in their browser and what agents can use to reach the Wazuh manager ports on the VM.
+
+When the `Three named components` topology is selected, `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01` are Docker service/container names inside the Docker network. They do not require public DNS records for this single-VM deployment.
+
 Internal Wazuh component traffic stays inside the Docker network and uses the selected service names. This means the public FQDN is for users and agents reaching the VM, not for dashboard-to-indexer or manager-to-indexer communication.
 
 If certificates already exist under `/opt/wazuh/wazuh-docker/single-node/config/wazuh_indexer_ssl_certs`, the script keeps them only when they match the selected topology and public endpoint metadata. If you change topology or FQDN between runs, move the existing certificate directory away before generating new certificates.
@@ -266,22 +276,72 @@ Only specify a port if you changed the Docker Compose port mapping manually.
 
 ## Network access restriction
 
-By default, the official Wazuh single-node Docker Compose file publishes its service ports on the Docker host. Restrict access according to your environment before exposing the server to untrusted networks.
+By default, the official Wazuh single-node Docker Compose file publishes its service ports on the Docker host. With Docker port publishing, do not rely only on classic `ufw` rules: Docker manages its own forwarding rules, and traffic to published container ports can bypass the usual `INPUT` chain filtering.
 
-For example, with `ufw`, allow dashboard access only from an internal subnet:
+Use the Docker `DOCKER-USER` chain to filter traffic before Docker accepts forwarded packets to published container ports. Replace every placeholder with the customer network plan before deployment:
 
-```bash
-sudo ufw allow from 192.168.1.0/24 to any port 443 proto tcp
+```text
+External interface:  <EXTERNAL_INTERFACE>
+Admin subnet:        <ADMIN_SUBNET>
+Agent subnet:        <AGENT_SUBNET>
+Syslog subnet:       <SYSLOG_SUBNET>
 ```
 
-Agent ports should normally be reachable only by endpoints that must enroll or send events to this Wazuh manager:
+Find the default outbound interface on the VM before replacing `<EXTERNAL_INTERFACE>`:
 
 ```bash
-sudo ufw allow from 192.168.1.0/24 to any port 1514 proto tcp
-sudo ufw allow from 192.168.1.0/24 to any port 1515 proto tcp
+ip route get 1.1.1.1 | awk '{for (i=1; i<=NF; i++) if ($i == "dev") print $(i+1)}'
 ```
 
-Avoid exposing ports `9200` and `55000` to untrusted networks.
+Example baseline rules:
+
+```bash
+sudo iptables -I DOCKER-USER 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+sudo iptables -I DOCKER-USER 2 -i <EXTERNAL_INTERFACE> -p tcp --dport 443 -s <ADMIN_SUBNET> -j ACCEPT
+sudo iptables -I DOCKER-USER 3 -i <EXTERNAL_INTERFACE> -p tcp --dport 1514 -s <AGENT_SUBNET> -j ACCEPT
+sudo iptables -I DOCKER-USER 4 -i <EXTERNAL_INTERFACE> -p tcp --dport 1515 -s <AGENT_SUBNET> -j ACCEPT
+sudo iptables -I DOCKER-USER 5 -i <EXTERNAL_INTERFACE> -p udp --dport 514 -s <SYSLOG_SUBNET> -j ACCEPT
+
+sudo iptables -I DOCKER-USER 6 -i <EXTERNAL_INTERFACE> -p tcp --dport 55000 -s <ADMIN_SUBNET> -j ACCEPT
+sudo iptables -I DOCKER-USER 7 -i <EXTERNAL_INTERFACE> -p tcp --dport 9200 -s <ADMIN_SUBNET> -j ACCEPT
+
+sudo iptables -A DOCKER-USER -i <EXTERNAL_INTERFACE> -p tcp --dport 443 -j DROP
+sudo iptables -A DOCKER-USER -i <EXTERNAL_INTERFACE> -p tcp --dport 1514 -j DROP
+sudo iptables -A DOCKER-USER -i <EXTERNAL_INTERFACE> -p tcp --dport 1515 -j DROP
+sudo iptables -A DOCKER-USER -i <EXTERNAL_INTERFACE> -p udp --dport 514 -j DROP
+sudo iptables -A DOCKER-USER -i <EXTERNAL_INTERFACE> -p tcp --dport 55000 -j DROP
+sudo iptables -A DOCKER-USER -i <EXTERNAL_INTERFACE> -p tcp --dport 9200 -j DROP
+```
+
+Port intent:
+
+```text
+443/tcp    Dashboard web access. Allow only administrators or trusted user networks.
+1514/tcp   Wazuh agent event traffic. Allow only enrolled endpoint networks.
+1515/tcp   Wazuh agent enrollment. Allow only endpoint networks during enrollment.
+514/udp    Syslog ingestion. Allow only trusted syslog senders.
+55000/tcp  Wazuh manager API. Avoid public exposure; allow only admin/automation sources if needed.
+9200/tcp   Wazuh indexer API. Avoid public exposure; allow only admin/backup/maintenance sources if needed.
+```
+
+If the indexer API is not required from outside the Docker host, do not add the `9200/tcp` allow rule. If the manager API is not required from outside the Docker host, do not add the `55000/tcp` allow rule.
+
+The exact rules depend on the client environment:
+
+- If agents come from several networks, add one allow rule per agent subnet for `1514/tcp` and `1515/tcp`.
+- If syslog sources use TCP instead of UDP, add an explicit `514/tcp` allow and drop pair.
+- If the VM has IPv6 enabled and Docker publishes IPv6 ports, mirror the policy with `ip6tables`.
+- Make these rules persistent with the distribution firewall tooling, for example `iptables-persistent` on Debian, after validating them on the test VM.
+
+Before exposing the VM outside an isolated lab, verify the effective policy:
+
+```bash
+sudo iptables -S DOCKER-USER
+sudo docker compose -f /opt/wazuh/wazuh-docker/single-node/docker-compose.yml ps
+```
+
+Then test from allowed and denied source networks. The deployment should be considered incomplete until dashboard, agent, enrollment, syslog, API, and indexer exposure match the customer security requirements.
 
 ## Certificates
 
