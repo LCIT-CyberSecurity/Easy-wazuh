@@ -284,6 +284,7 @@ Use the Docker `DOCKER-USER` chain to filter traffic before Docker accepts forwa
 External interface:  <EXTERNAL_INTERFACE>
 Admin subnet:        <ADMIN_SUBNET>
 Agent subnet:        <AGENT_SUBNET>
+API client subnet:   <API_CLIENT_SUBNET>
 Syslog subnet:       <SYSLOG_SUBNET>
 ```
 
@@ -303,7 +304,7 @@ sudo iptables -I DOCKER-USER 3 -i <EXTERNAL_INTERFACE> -p tcp --dport 1514 -s <A
 sudo iptables -I DOCKER-USER 4 -i <EXTERNAL_INTERFACE> -p tcp --dport 1515 -s <AGENT_SUBNET> -j ACCEPT
 sudo iptables -I DOCKER-USER 5 -i <EXTERNAL_INTERFACE> -p udp --dport 514 -s <SYSLOG_SUBNET> -j ACCEPT
 
-sudo iptables -I DOCKER-USER 6 -i <EXTERNAL_INTERFACE> -p tcp --dport 55000 -s <ADMIN_SUBNET> -j ACCEPT
+sudo iptables -I DOCKER-USER 6 -i <EXTERNAL_INTERFACE> -p tcp --dport 55000 -s <API_CLIENT_SUBNET> -j ACCEPT
 sudo iptables -I DOCKER-USER 7 -i <EXTERNAL_INTERFACE> -p tcp --dport 9200 -s <ADMIN_SUBNET> -j ACCEPT
 
 sudo iptables -A DOCKER-USER -i <EXTERNAL_INTERFACE> -p tcp --dport 443 -j DROP
@@ -321,7 +322,7 @@ Port intent:
 1514/tcp   Wazuh agent event traffic. Allow only enrolled endpoint networks.
 1515/tcp   Wazuh agent enrollment. Allow only endpoint networks during enrollment.
 514/udp    Syslog ingestion. Allow only trusted syslog senders.
-55000/tcp  Wazuh manager API. Avoid public exposure; allow only admin/automation sources if needed.
+55000/tcp  Wazuh manager API. Avoid public exposure; allow only approved API clients or automation sources.
 9200/tcp   Wazuh indexer API. Avoid public exposure; allow only admin/backup/maintenance sources if needed.
 ```
 
@@ -330,9 +331,12 @@ If the indexer API is not required from outside the Docker host, do not add the 
 The exact rules depend on the client environment:
 
 - If agents come from several networks, add one allow rule per agent subnet for `1514/tcp` and `1515/tcp`.
+- If API clients or automation systems come from several networks, add one allow rule per approved API client subnet for `55000/tcp`.
 - If syslog sources use TCP instead of UDP, add an explicit `514/tcp` allow and drop pair.
 - If the VM has IPv6 enabled and Docker publishes IPv6 ports, mirror the policy with `ip6tables`.
 - Make these rules persistent with the distribution firewall tooling, for example `iptables-persistent` on Debian, after validating them on the test VM.
+
+Do not apply the final `DROP` rules until the customer-approved dashboard, agent, API client, and syslog source networks are known. Applying the drops too early can block legitimate agents, API clients, or log senders.
 
 Before exposing the VM outside an isolated lab, verify the effective policy:
 
