@@ -12,6 +12,14 @@ Single-node means that all Wazuh central components run on the same Docker host 
 - Wazuh indexer
 - Wazuh dashboard
 
+The installer can deploy this stack with either the official Wazuh Docker service names, or with clearer fixed component names for lab deployments:
+
+```text
+wazuh-indexer01
+wazuh-manager01
+wazuh-dashboard01
+```
+
 ## Disclaimer
 
 <p><strong><font color="red">Wazuh single-node proof of concept only. It is not intended for production use.</font></strong></p>
@@ -105,6 +113,14 @@ Run the installer with sudo:
 sudo ./Wazuh-installer.sh
 ```
 
+The installer asks for the public FQDN or IP address that clients will use to reach the Wazuh VM. For repeatable test deployments, you can provide it non-interactively:
+
+```bash
+sudo WAZUH_PUBLIC_FQDN=wazuh.example.com ./Wazuh-installer.sh
+```
+
+This value is used for the dashboard URL and for the generated dashboard certificate configuration. Internal container-to-container traffic uses the service names selected by the topology choice.
+
 At startup, the script asks which installation mode to use:
 
 ```text
@@ -112,11 +128,37 @@ At startup, the script asks which installation mode to use:
 2) Existing Docker environment - keep current Docker installation
 ```
 
-The script asks for confirmation before continuing with the selected mode. It also asks for a final confirmation before starting the Wazuh containers. The script explicitly reminds the user that this is a single-node PoC deployment, not a production deployment.
+The script then asks which Wazuh Docker topology to use:
+
+```text
+1) Single-node official stack - Wazuh default service names
+2) Three named components - manager, indexer, dashboard as separate containers/images
+```
+
+Both choices run the Wazuh manager, indexer, and dashboard on the same Docker host for PoC/lab use. The difference is naming:
+
+- `Single-node official stack` keeps the official service names: `wazuh.indexer`, `wazuh.manager`, and `wazuh.dashboard`.
+- `Three named components` rewrites the stack to use `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01` as service names and fixed container names. The manager, indexer, and dashboard keep their separate Wazuh Docker images.
+
+The script asks for confirmation before continuing with the selected mode and topology. It also asks for a final confirmation before starting the Wazuh containers. The script explicitly reminds the user that this is a single-node PoC deployment, not a production deployment.
 
 In fresh Debian mode, the script installs Docker, configures the Wazuh indexer kernel requirement, clones the official Wazuh Docker repository, generates self-signed certificates, starts the single-node stack, and prints the access information at the end.
 
 In existing Docker mode, the script checks that Docker and the Docker Compose plugin are already available before continuing. It does not remove or reinstall Docker packages.
+
+## FQDN and certificates
+
+The public FQDN or IP address is used for the dashboard access URL and the generated dashboard certificate configuration. The script validates the value and warns if the FQDN does not resolve to the detected VM IP address.
+
+For repeatable VM tests, create or update DNS before deployment, or pass the expected name explicitly:
+
+```bash
+sudo WAZUH_PUBLIC_FQDN=wazuh.lab.example ./Wazuh-installer.sh
+```
+
+Internal Wazuh component traffic stays inside the Docker network and uses the selected service names. This means the public FQDN is for users and agents reaching the VM, not for dashboard-to-indexer or manager-to-indexer communication.
+
+If certificates already exist under `/opt/wazuh/wazuh-docker/single-node/config/wazuh_indexer_ssl_certs`, the script keeps them only when they match the selected topology and public endpoint metadata. If you change topology or FQDN between runs, move the existing certificate directory away before generating new certificates.
 
 ## Docker safety checks
 
@@ -190,10 +232,10 @@ The `-v` and `--volumes` options remove Docker volumes. Removing volumes can del
 After installation, the Wazuh dashboard is available at:
 
 ```text
-https://<server-fqdn>
+https://<public-fqdn-or-ip>
 ```
 
-If the server FQDN is not available or not resolvable from your browser, use the server IP address instead:
+If the public FQDN is not available or not resolvable from your browser, use the server IP address instead:
 
 ```text
 https://<server-ip>
@@ -217,7 +259,7 @@ The default Wazuh single-node Docker deployment exposes these ports:
 No port needs to be added to the dashboard URL with the default Wazuh Docker Compose configuration:
 
 ```text
-https://<server-fqdn>
+https://<public-fqdn-or-ip>
 ```
 
 Only specify a port if you changed the Docker Compose port mapping manually.
