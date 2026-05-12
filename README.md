@@ -162,6 +162,28 @@ Both choices run the Wazuh manager, indexer, and dashboard on the same Docker ho
 - `Official Wazuh Docker names` keeps the official service names: `wazuh.indexer`, `wazuh.manager`, and `wazuh.dashboard`.
 - `Three named components` rewrites the stack to use `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01` as service names and fixed container names. The manager, indexer, and dashboard keep their separate Wazuh Docker images.
 
+When `Three named components` is selected, the script asks whether to customize the component hostnames:
+
+```text
+Customize component hostnames? [y/N]:
+Indexer hostname [wazuh-indexer01]:
+Manager hostname [wazuh-manager01]:
+Dashboard hostname [wazuh-dashboard01]:
+```
+
+If the user accepts the defaults, the installer keeps `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01`. Hostname values must be DNS labels without dots or underscores. The internal TLS FQDNs are then built by combining each hostname with the selected internal DNS suffix.
+
+The component hostnames can also be provided non-interactively:
+
+```bash
+sudo WAZUH_INDEXER_HOSTNAME=wazuh-indexer01 \
+  WAZUH_MANAGER_HOSTNAME=wazuh-manager01 \
+  WAZUH_DASHBOARD_HOSTNAME=wazuh-dashboard01 \
+  WAZUH_INTERNAL_DNS_SUFFIX=lab.example \
+  WAZUH_PUBLIC_FQDN=wazuh.lab.example \
+  ./Wazuh-installer.sh
+```
+
 The script asks for confirmation before continuing with the selected mode and topology. It also asks for a final confirmation before starting the Wazuh containers. The script explicitly reminds the user that this is a one Docker host/VM PoC deployment, not a production deployment.
 
 In fresh Debian mode, the script installs Docker, configures the Wazuh indexer kernel requirement, clones the official Wazuh Docker repository, generates self-signed certificates, starts the single-node stack, and prints the access information at the end.
@@ -190,7 +212,7 @@ When the `Three named components` topology is selected, `wazuh-indexer01`, `wazu
 
 The Wazuh certificate generator requires DNS values with a domain suffix. For the named component topology, the script asks for an internal TLS DNS suffix. By default, it uses the domain part of the VM hostname when available, otherwise it uses `local`.
 
-For example, if the suffix is `lab.example`, the internal Docker TLS aliases are:
+For example, with the default component hostnames and the suffix `lab.example`, the internal Docker TLS aliases are:
 
 ```text
 wazuh-indexer01.lab.example

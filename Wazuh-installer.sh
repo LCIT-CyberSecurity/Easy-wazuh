@@ -32,6 +32,9 @@ WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE"
 WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE"
 WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE"
 WAZUH_INTERNAL_DNS_SUFFIX="${WAZUH_INTERNAL_DNS_SUFFIX:-}"
+WAZUH_INDEXER_HOSTNAME="${WAZUH_INDEXER_HOSTNAME:-}"
+WAZUH_MANAGER_HOSTNAME="${WAZUH_MANAGER_HOSTNAME:-}"
+WAZUH_DASHBOARD_HOSTNAME="${WAZUH_DASHBOARD_HOSTNAME:-}"
 DEPLOYMENT_TOPOLOGY=""
 DEPLOYMENT_TOPOLOGY_LABEL=""
 USE_FIXED_CONTAINER_NAMES="no"
@@ -101,6 +104,16 @@ is_valid_dns_suffix() {
   is_valid_fqdn "host.$VALUE"
 }
 
+is_valid_dns_label() {
+  local VALUE="$1"
+
+  if [ "${#VALUE}" -gt 63 ]; then
+    return 1
+  fi
+
+  [[ "$VALUE" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]]
+}
+
 is_valid_public_endpoint() {
   local VALUE="$1"
 
@@ -129,6 +142,18 @@ set_named_component_dns_names() {
   WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE.$DNS_SUFFIX"
   WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE.$DNS_SUFFIX"
   WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE.$DNS_SUFFIX"
+}
+
+set_named_component_hostnames() {
+  if [ "$1" = "$2" ] || [ "$1" = "$3" ] || [ "$2" = "$3" ]; then
+    echo "Error: component hostnames must be unique."
+    exit 1
+  fi
+
+  WAZUH_INDEXER_NODE="$1"
+  WAZUH_MANAGER_NODE="$2"
+  WAZUH_DASHBOARD_NODE="$3"
+  set_named_component_dns_names "${WAZUH_INTERNAL_DNS_SUFFIX:-local}"
 }
 
 prompt_public_endpoint() {
@@ -164,6 +189,70 @@ prompt_public_endpoint() {
       exit 1
     fi
   done
+}
+
+prompt_component_hostname() {
+  local ROLE="$1"
+  local DEFAULT_HOSTNAME="$2"
+  local ENTERED_HOSTNAME
+
+  while true; do
+    read -r -p "$ROLE hostname [$DEFAULT_HOSTNAME]: " ENTERED_HOSTNAME
+    if [ -z "$ENTERED_HOSTNAME" ]; then
+      ENTERED_HOSTNAME="$DEFAULT_HOSTNAME"
+    fi
+
+    if is_valid_dns_label "$ENTERED_HOSTNAME"; then
+      COMPONENT_HOSTNAME="$ENTERED_HOSTNAME"
+      return 0
+    fi
+
+    echo "Invalid hostname: $ENTERED_HOSTNAME"
+    echo "Use a DNS label such as wazuh-indexer01, without dots or underscores."
+  done
+}
+
+configure_named_component_hostnames() {
+  local CUSTOMIZE_HOSTNAMES
+  local INDEXER_HOSTNAME
+  local MANAGER_HOSTNAME
+  local DASHBOARD_HOSTNAME
+
+  if [ "$USE_FIXED_CONTAINER_NAMES" != "yes" ]; then
+    return 0
+  fi
+
+  INDEXER_HOSTNAME="${WAZUH_INDEXER_HOSTNAME:-$WAZUH_INDEXER_NODE}"
+  MANAGER_HOSTNAME="${WAZUH_MANAGER_HOSTNAME:-$WAZUH_MANAGER_NODE}"
+  DASHBOARD_HOSTNAME="${WAZUH_DASHBOARD_HOSTNAME:-$WAZUH_DASHBOARD_NODE}"
+
+  if [ -n "$WAZUH_INDEXER_HOSTNAME" ] || [ -n "$WAZUH_MANAGER_HOSTNAME" ] || [ -n "$WAZUH_DASHBOARD_HOSTNAME" ]; then
+    if ! is_valid_dns_label "$INDEXER_HOSTNAME" || ! is_valid_dns_label "$MANAGER_HOSTNAME" || ! is_valid_dns_label "$DASHBOARD_HOSTNAME"; then
+      echo "Error: invalid WAZUH_*_HOSTNAME value."
+      echo "Hostnames must be DNS labels without dots or underscores."
+      exit 1
+    fi
+
+    set_named_component_hostnames "$INDEXER_HOSTNAME" "$MANAGER_HOSTNAME" "$DASHBOARD_HOSTNAME"
+    return 0
+  fi
+
+  read -r -p "Customize component hostnames? [y/N]: " CUSTOMIZE_HOSTNAMES
+
+  case "$CUSTOMIZE_HOSTNAMES" in
+    y|Y|yes|YES)
+      prompt_component_hostname "Indexer" "$WAZUH_INDEXER_NODE"
+      INDEXER_HOSTNAME="$COMPONENT_HOSTNAME"
+      prompt_component_hostname "Manager" "$WAZUH_MANAGER_NODE"
+      MANAGER_HOSTNAME="$COMPONENT_HOSTNAME"
+      prompt_component_hostname "Dashboard" "$WAZUH_DASHBOARD_NODE"
+      DASHBOARD_HOSTNAME="$COMPONENT_HOSTNAME"
+      set_named_component_hostnames "$INDEXER_HOSTNAME" "$MANAGER_HOSTNAME" "$DASHBOARD_HOSTNAME"
+      ;;
+    *)
+      set_named_component_hostnames "$WAZUH_INDEXER_NODE" "$WAZUH_MANAGER_NODE" "$WAZUH_DASHBOARD_NODE"
+      ;;
+  esac
 }
 
 prompt_internal_dns_suffix() {
@@ -660,16 +749,17 @@ echo ""
 
 select_deployment_topology
 
+configure_named_component_hostnames
+
 echo ""
 echo "Selected topology: $DEPLOYMENT_TOPOLOGY_LABEL"
 echo "Docker service/container naming:"
 echo "  Indexer:   $WAZUH_INDEXER_NODE"
 echo "  Manager:   $WAZUH_MANAGER_NODE"
 echo "  Dashboard: $WAZUH_DASHBOARD_NODE"
-echo "Internal TLS DNS names:"
-echo "  Indexer:   $WAZUH_INDEXER_DNS"
-echo "  Manager:   $WAZUH_MANAGER_DNS"
-echo "  Dashboard: $WAZUH_DASHBOARD_DNS"
+if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
+  echo "Internal TLS DNS suffix will be requested after host FQDN detection."
+fi
 echo ""
 
 read -r -p "Continue with this installation mode and topology? [y/N]: " CONFIRM_INSTALL
