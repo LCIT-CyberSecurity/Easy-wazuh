@@ -12,6 +12,8 @@ The stack uses three separate Wazuh component images and containers on the same 
 - Wazuh indexer
 - Wazuh dashboard
 
+This separation is intentional. It keeps the Wazuh roles, logs, volumes, and configuration boundaries visible from the first PoC. It also makes future analysis easier if the customer later wants to move, scale, or redesign one layer independently.
+
 The installer can deploy this stack with either the official Wazuh Docker service names, or with clearer fixed component names for lab deployments:
 
 ```text
@@ -22,7 +24,7 @@ wazuh-dashboard01
 
 ## Disclaimer
 
-<p><strong><font color="red">Wazuh single-node proof of concept only. It is not intended for production use.</font></strong></p>
+<p><strong><font color="red">Wazuh one Docker host/VM proof of concept only. It is not intended for production use.</font></strong></p>
 
 Before designing or deploying a production Wazuh environment, you must evaluate the expected log transaction rate, usually expressed as events/logs per second, the required processing load, retention period, indexed data volume, number of agents, alerting use cases, and peak ingestion scenarios.
 
@@ -32,11 +34,31 @@ In production, Wazuh components should be separated so each layer can absorb the
 - Wazuh indexer nodes for indexing, search, storage, and retention.
 - Wazuh dashboard nodes for user access and visualization.
 
-This single-node setup does not provide high availability, workload separation, or the resilience expected from a production Wazuh deployment. Separating components makes it possible to scale, tune, monitor, back up, and maintain each layer independently.
+This one Docker host/VM setup does not provide high availability, workload distribution across machines, or the resilience expected from a production Wazuh deployment. Separating components makes it possible to observe, tune, back up, and later redesign each layer independently, but it does not create a Wazuh cluster by itself.
+
+## Scaling and migration
+
+This installer uses three separate Wazuh images and containers because that matches the main Wazuh roles:
+
+```text
+wazuh/wazuh-indexer    -> indexer container
+wazuh/wazuh-manager    -> manager container
+wazuh/wazuh-dashboard  -> dashboard container
+```
+
+This is useful for a future migration because each role already has its own container, configuration, logs, and volumes. However, scaling is still a separate architecture task.
+
+Moving the whole stack to another Docker VM is usually a controlled backup/restore operation: preserve the Docker volumes, mounted configuration, certificates, and public FQDN behavior.
+
+Splitting the roles across several VMs is not a simple container move. It requires new DNS/FQDN planning, certificates, firewall rules, Wazuh manager/indexer/dashboard configuration changes, and data migration planning.
+
+Moving to Kubernetes is also a dedicated project. It requires Kubernetes-native design for persistent storage, Secrets, ConfigMaps, Services, Ingress or load balancers, health checks, resource limits, and certificate management.
+
+In short, this PoC layout prepares clean role separation, but production scaling requires a distributed Wazuh design and should follow the official Wazuh architecture guidance.
 
 ## Prerequisites
 
-- A Debian 13 machine, or an existing Docker environment correctly sized for a Wazuh single-node PoC.
+- A Debian 13 machine, or an existing Docker environment correctly sized for a one Docker host/VM Wazuh PoC.
 - A user account with sudo privileges.
 - A stable internet connection for Docker image downloads and Wazuh image pulls.
 - Network access from the Wazuh server to the endpoints you want to monitor.
@@ -44,7 +66,7 @@ This single-node setup does not provide high availability, workload separation, 
 
 ## Machine specifications
 
-For a simple Wazuh Docker single-node PoC installation, use at least:
+For a simple one Docker host/VM Wazuh PoC installation, use at least:
 
 ```text
 CPU:      4 vCPU
