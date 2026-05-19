@@ -367,6 +367,10 @@ Client/runtime data backup archives matching Wazuh Docker volumes into:
 /opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS/docker-volumes/
 ```
 
+Backup directories are created with root-only permissions because they can contain Wazuh certificates, private keys, local agent configuration, alerts, indexed events, and other client data.
+
+During restore, Docker volume archives are checked before extraction. Archives containing absolute paths or `..` path traversal entries are rejected. Restore only backups from trusted Easy-wazuh runs, especially when restoring client/runtime data.
+
 For consistent client/runtime data backups or restores, stop the Wazuh containers first:
 
 ```bash

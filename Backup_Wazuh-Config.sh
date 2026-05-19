@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -Eeuo pipefail
+umask 077
 
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/easy-wazuh-backups}"
 TIMESTAMP="$(date +%Y%m%d%H%M%S)"
@@ -37,6 +38,34 @@ copy_if_exists() {
   else
     echo "Skipped, not found: $SOURCE"
   fi
+}
+
+ensure_private_directory() {
+  local DIRECTORY="$1"
+
+  install -d -m 700 "$DIRECTORY"
+}
+
+validate_tar_archive_paths() {
+  local ARCHIVE="$1"
+  local ENTRY
+
+  if ! tar -tzf "$ARCHIVE" >/dev/null; then
+    echo "Error: invalid or unreadable tar archive:"
+    echo "  $ARCHIVE"
+    exit 1
+  fi
+
+  while IFS= read -r ENTRY; do
+    case "$ENTRY" in
+      ""|/*|..|../*|*/..|*/../*)
+        echo "Error: unsafe path found in tar archive:"
+        echo "  $ENTRY"
+        echo "Archive rejected: $ARCHIVE"
+        exit 1
+        ;;
+    esac
+  done < <(tar -tzf "$ARCHIVE")
 }
 
 restore_if_exists() {
@@ -452,7 +481,7 @@ backup_docker_volume() {
     return 0
   fi
 
-  mkdir -p "$(dirname "$TARGET")"
+  ensure_private_directory "$(dirname "$TARGET")"
   tar --warning=no-file-changed -C "$MOUNTPOINT" -czf "$TARGET" .
   echo "Saved Docker volume: $LOGICAL_VOLUME ($VOLUME_NAME)"
 }
@@ -526,6 +555,8 @@ restore_docker_volume() {
     exit 1
   fi
 
+  validate_tar_archive_paths "$SOURCE"
+
   find "$MOUNTPOINT" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   tar -C "$MOUNTPOINT" -xzf "$SOURCE"
   echo "Restored Docker volume: $LOGICAL_VOLUME ($VOLUME_NAME)"
@@ -587,7 +618,8 @@ run_backup() {
   select_stack_type
   BACKUP_STACK_DIR="$BACKUP_DIR/wazuh-docker-$STACK_TYPE"
 
-  mkdir -p "$BACKUP_DIR"
+  ensure_private_directory "$BACKUP_ROOT"
+  ensure_private_directory "$BACKUP_DIR"
 
   echo "Backup directory:"
   echo "  $BACKUP_DIR"
