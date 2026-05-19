@@ -11,8 +11,8 @@ echo "  This installer deploys a Wazuh Docker stack on one Docker host/VM"
 echo "  for PoC/lab use."
 echo "  The stack uses three separate Wazuh component images and containers:"
 echo "  manager, indexer, and dashboard."
-echo "  The installer can keep the official Wazuh Docker service names, or rename"
-echo "  the three component containers for clearer lab deployments."
+echo "  The installer can deploy the official single-node stack or a multi-node"
+echo "  stack using numbered FQDN component names."
 echo "  This installer is not intended for production deployments."
 echo ""
 
@@ -24,6 +24,7 @@ fi
 
 WAZUH_VERSION="${WAZUH_VERSION:-v4.14.5}"
 WAZUH_PUBLIC_FQDN="${WAZUH_PUBLIC_FQDN:-}"
+WAZUH_PUBLIC_DNS_SUFFIX="${WAZUH_PUBLIC_DNS_SUFFIX:-}"
 WAZUH_PORTS=(443 1514 1515 514 55000 9200)
 WAZUH_INDEXER_NODE="wazuh.indexer"
 WAZUH_MANAGER_NODE="wazuh.manager"
@@ -38,7 +39,17 @@ WAZUH_DASHBOARD_HOSTNAME="${WAZUH_DASHBOARD_HOSTNAME:-}"
 EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME="${EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME:-}"
 DEPLOYMENT_TOPOLOGY=""
 DEPLOYMENT_TOPOLOGY_LABEL=""
+DEPLOYMENT_STACK_MODE=""
+DEPLOYMENT_STACK_LABEL=""
+STACK_SUBDIR=""
 USE_FIXED_CONTAINER_NAMES="no"
+WAZUH_WORKER_NODE=""
+WAZUH_INDEXER_NODES=()
+WAZUH_MANAGER_NODES=()
+WAZUH_DASHBOARD_NODES=()
+WAZUH_FRONTEND_NODES=()
+WAZUH_CERT_NODES=()
+WAZUH_COMPOSE_SERVICES=()
 
 # Keep version input narrow so it cannot be interpreted as a Git option.
 if [[ ! "$WAZUH_VERSION" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
@@ -149,12 +160,66 @@ host_dns_suffix() {
   fi
 }
 
+default_dashboard_fqdn() {
+  local DETECTED_FQDN="$1"
+  local DNS_SUFFIX
+
+  if is_valid_fqdn "$DETECTED_FQDN"; then
+    echo "$DETECTED_FQDN"
+    return 0
+  fi
+
+  DNS_SUFFIX="${WAZUH_PUBLIC_DNS_SUFFIX:-${WAZUH_INTERNAL_DNS_SUFFIX:-local}}"
+
+  if is_valid_dns_label "$DETECTED_FQDN" && is_valid_dns_suffix "$DNS_SUFFIX"; then
+    echo "$DETECTED_FQDN.$DNS_SUFFIX"
+    return 0
+  fi
+
+  echo ""
+}
+
+server_fqdn_with_suffix() {
+  local DETECTED_NAME="$1"
+  local DNS_SUFFIX="$2"
+
+  if is_valid_fqdn "$DETECTED_NAME" || is_valid_ipv4 "$DETECTED_NAME"; then
+    echo "$DETECTED_NAME"
+    return 0
+  fi
+
+  if is_valid_dns_label "$DETECTED_NAME" && is_valid_dns_suffix "$DNS_SUFFIX"; then
+    echo "$DETECTED_NAME.$DNS_SUFFIX"
+    return 0
+  fi
+
+  echo "$DETECTED_NAME"
+}
+
 set_named_component_dns_names() {
   local DNS_SUFFIX="$1"
 
   WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE.$DNS_SUFFIX"
   WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE.$DNS_SUFFIX"
   WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE.$DNS_SUFFIX"
+}
+
+set_multi_node_fqdn_names() {
+  local DNS_SUFFIX="$1"
+
+  WAZUH_INDEXER_NODE="wazuh-indexer01.$DNS_SUFFIX"
+  WAZUH_MANAGER_NODE="wazuh-manager01.$DNS_SUFFIX"
+  WAZUH_DASHBOARD_NODE="wazuh-dashboard01.$DNS_SUFFIX"
+  WAZUH_WORKER_NODE="wazuh-manager02.$DNS_SUFFIX"
+  WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE"
+  WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE"
+  WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE"
+  WAZUH_INDEXER_NODES=("wazuh-indexer01.$DNS_SUFFIX" "wazuh-indexer02.$DNS_SUFFIX" "wazuh-indexer03.$DNS_SUFFIX")
+  WAZUH_MANAGER_NODES=("wazuh-manager01.$DNS_SUFFIX" "wazuh-manager02.$DNS_SUFFIX")
+  WAZUH_DASHBOARD_NODES=("wazuh-dashboard01.$DNS_SUFFIX")
+  WAZUH_FRONTEND_NODES=("nginx")
+  WAZUH_CERT_NODES=("${WAZUH_INDEXER_NODES[@]}" "${WAZUH_MANAGER_NODES[@]}" "${WAZUH_DASHBOARD_NODES[@]}")
+  WAZUH_COMPOSE_SERVICES=("${WAZUH_INDEXER_NODES[@]}" "${WAZUH_MANAGER_NODES[@]}" "${WAZUH_DASHBOARD_NODES[@]}" "nginx")
 }
 
 set_named_component_hostnames() {
@@ -173,9 +238,23 @@ prompt_public_endpoint() {
   local DETECTED_FQDN="$1"
   local DETECTED_IP="$2"
   local DEFAULT_ENDPOINT
+  local DEFAULT_FQDN
+  local DEFAULT_FQDN_IP
   local ENTERED_ENDPOINT
 
-  DEFAULT_ENDPOINT="$DETECTED_FQDN"
+  DEFAULT_FQDN="$(default_dashboard_fqdn "$DETECTED_FQDN")"
+  DEFAULT_ENDPOINT="$DEFAULT_FQDN"
+
+  if [ -n "$DEFAULT_FQDN" ] && ! is_valid_ipv4 "$DEFAULT_FQDN" && command -v getent >/dev/null 2>&1; then
+    DEFAULT_FQDN_IP="$(resolve_first_ipv4 "$DEFAULT_FQDN")"
+    if [ -n "$DEFAULT_FQDN_IP" ] && [ -n "$DETECTED_IP" ] && [ "$DEFAULT_FQDN_IP" != "$DETECTED_IP" ]; then
+      echo "Warning: default dashboard FQDN $DEFAULT_FQDN resolves to $DEFAULT_FQDN_IP,"
+      echo "but this VM IP appears to be $DETECTED_IP."
+      echo "Keeping $DEFAULT_FQDN as the default dashboard URL host."
+      echo "Use $DETECTED_IP manually only if DNS is not ready for this test."
+    fi
+  fi
+
   if ! is_valid_public_endpoint "$DEFAULT_ENDPOINT"; then
     DEFAULT_ENDPOINT="$DETECTED_IP"
   fi
@@ -184,7 +263,7 @@ prompt_public_endpoint() {
     if [ -n "$WAZUH_PUBLIC_FQDN" ]; then
       ENTERED_ENDPOINT="$WAZUH_PUBLIC_FQDN"
     else
-      read -r -p "Public FQDN or IP clients will use [$DEFAULT_ENDPOINT]: " ENTERED_ENDPOINT
+      read -r -p "Dashboard FQDN or IP clients will use [$DEFAULT_ENDPOINT]: " ENTERED_ENDPOINT
       if [ -z "$ENTERED_ENDPOINT" ]; then
         ENTERED_ENDPOINT="$DEFAULT_ENDPOINT"
       fi
@@ -195,7 +274,7 @@ prompt_public_endpoint() {
       return 0
     fi
 
-    echo "Invalid public endpoint: $ENTERED_ENDPOINT"
+    echo "Invalid dashboard FQDN or IP: $ENTERED_ENDPOINT"
     echo "Use a valid FQDN such as wazuh.example.com, or an IPv4 address."
 
     if [ -n "$WAZUH_PUBLIC_FQDN" ]; then
@@ -273,7 +352,7 @@ prompt_internal_dns_suffix() {
   local DEFAULT_SUFFIX
   local ENTERED_SUFFIX
 
-  if [ "$USE_FIXED_CONTAINER_NAMES" != "yes" ]; then
+  if [ "$USE_FIXED_CONTAINER_NAMES" != "yes" ] && [ "$DEPLOYMENT_STACK_MODE" != "multi-node" ]; then
     return 0
   fi
 
@@ -294,7 +373,11 @@ prompt_internal_dns_suffix() {
 
     if is_valid_dns_suffix "$ENTERED_SUFFIX"; then
       WAZUH_INTERNAL_DNS_SUFFIX="$ENTERED_SUFFIX"
-      set_named_component_dns_names "$WAZUH_INTERNAL_DNS_SUFFIX"
+      if [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
+        set_multi_node_fqdn_names "$WAZUH_INTERNAL_DNS_SUFFIX"
+      else
+        set_named_component_dns_names "$WAZUH_INTERNAL_DNS_SUFFIX"
+      fi
       return 0
     fi
 
@@ -337,34 +420,54 @@ prompt_local_agent_fim_realtime() {
   esac
 }
 
-select_deployment_topology() {
-  echo "Wazuh Docker topology:"
-  echo "  1) Official Wazuh Docker names - default service/container names"
-  echo "  2) Three named components - manager, indexer, dashboard as separate containers/images"
+select_deployment_stack_mode() {
+  echo "Wazuh Docker deployment mode:"
+  echo "  1) single-node - lab/small PoC on one Docker host"
+  echo "  2) multi-node - recommended default for scalable Wazuh Docker deployments"
   echo ""
 
   while true; do
-    read -r -p "Choose Wazuh topology [1/2]: " DEPLOYMENT_TOPOLOGY
+    read -r -p "Choose Wazuh deployment mode [1/2, default 2]: " DEPLOYMENT_STACK_MODE
 
-    case "$DEPLOYMENT_TOPOLOGY" in
+    case "$DEPLOYMENT_STACK_MODE" in
       1)
-        DEPLOYMENT_TOPOLOGY_LABEL="Official Wazuh Docker names"
+        DEPLOYMENT_STACK_MODE="single-node"
+        DEPLOYMENT_STACK_LABEL="Single-node"
+        STACK_SUBDIR="single-node"
         WAZUH_INDEXER_NODE="wazuh.indexer"
         WAZUH_MANAGER_NODE="wazuh.manager"
         WAZUH_DASHBOARD_NODE="wazuh.dashboard"
+        WAZUH_WORKER_NODE=""
         WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE"
         WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE"
         WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE"
+        WAZUH_INDEXER_NODES=("wazuh.indexer")
+        WAZUH_MANAGER_NODES=("wazuh.manager")
+        WAZUH_DASHBOARD_NODES=("wazuh.dashboard")
+        WAZUH_FRONTEND_NODES=()
+        WAZUH_CERT_NODES=("wazuh.indexer" "wazuh.manager" "wazuh.dashboard")
+        WAZUH_COMPOSE_SERVICES=("wazuh.indexer" "wazuh.manager" "wazuh.dashboard")
         USE_FIXED_CONTAINER_NAMES="no"
         break
         ;;
-      2)
-        DEPLOYMENT_TOPOLOGY_LABEL="Three named components"
+      2|"")
+        DEPLOYMENT_STACK_MODE="multi-node"
+        DEPLOYMENT_STACK_LABEL="Multi-node"
+        STACK_SUBDIR="multi-node"
         WAZUH_INDEXER_NODE="wazuh-indexer01"
         WAZUH_MANAGER_NODE="wazuh-manager01"
         WAZUH_DASHBOARD_NODE="wazuh-dashboard01"
-        set_named_component_dns_names "local"
-        USE_FIXED_CONTAINER_NAMES="yes"
+        WAZUH_WORKER_NODE="wazuh-manager02"
+        WAZUH_INDEXER_DNS="$WAZUH_INDEXER_NODE"
+        WAZUH_MANAGER_DNS="$WAZUH_MANAGER_NODE"
+        WAZUH_DASHBOARD_DNS="$WAZUH_DASHBOARD_NODE"
+        WAZUH_INDEXER_NODES=("wazuh-indexer01" "wazuh-indexer02" "wazuh-indexer03")
+        WAZUH_MANAGER_NODES=("wazuh-manager01" "wazuh-manager02")
+        WAZUH_DASHBOARD_NODES=("wazuh-dashboard01")
+        WAZUH_FRONTEND_NODES=("nginx")
+        WAZUH_CERT_NODES=("wazuh-indexer01" "wazuh-indexer02" "wazuh-indexer03" "wazuh-manager01" "wazuh-manager02" "wazuh-dashboard01")
+        WAZUH_COMPOSE_SERVICES=("wazuh-indexer01" "wazuh-indexer02" "wazuh-indexer03" "wazuh-manager01" "wazuh-manager02" "wazuh-dashboard01" "nginx")
+        USE_FIXED_CONTAINER_NAMES="no"
         break
         ;;
       *)
@@ -372,6 +475,33 @@ select_deployment_topology() {
         ;;
     esac
   done
+}
+
+select_deployment_topology() {
+  DEPLOYMENT_TOPOLOGY="official"
+  if [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
+    DEPLOYMENT_TOPOLOGY_LABEL="Named multi-node component names"
+  else
+    DEPLOYMENT_TOPOLOGY_LABEL="Official Wazuh Docker names"
+  fi
+
+  echo "Wazuh Docker topology:"
+  echo "  $DEPLOYMENT_STACK_LABEL - $DEPLOYMENT_TOPOLOGY_LABEL"
+  if [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
+    echo "  The official Wazuh Docker multi-node stack is rewritten with clearer"
+    echo "  numbered FQDN component names after host FQDN detection."
+  else
+    echo "  The official Wazuh Docker single-node service names are kept."
+  fi
+  echo ""
+  echo "Wazuh services:"
+  printf '  Indexers:  %s\n' "${WAZUH_INDEXER_NODES[*]}"
+  printf '  Managers:  %s\n' "${WAZUH_MANAGER_NODES[*]}"
+  printf '  Dashboard: %s\n' "${WAZUH_DASHBOARD_NODES[*]}"
+  if [ "${#WAZUH_FRONTEND_NODES[@]}" -gt 0 ]; then
+    printf '  Frontend:  %s\n' "${WAZUH_FRONTEND_NODES[*]}"
+  fi
+  echo ""
 }
 
 check_public_endpoint_resolution() {
@@ -402,12 +532,14 @@ check_public_endpoint_resolution() {
     return 0
   fi
 
-  echo "Public endpoint DNS check: $ENDPOINT resolves to $RESOLVED_IP"
+  echo "Dashboard FQDN DNS check: $ENDPOINT resolves to $RESOLVED_IP"
 }
 
 print_wazuh_connection_summary() {
   echo "Wazuh connection summary:"
   echo "  Dashboard URL:        https://$PUBLIC_ENDPOINT"
+  echo "  Detected server FQDN: $SERVER_FQDN"
+  echo "  Detected server IP:   $SERVER_IP"
   echo "  Agent events TCP:     $PUBLIC_ENDPOINT:1514"
   echo "  Agent enrollment TCP: $PUBLIC_ENDPOINT:1515"
   echo "  Syslog UDP:           $PUBLIC_ENDPOINT:514"
@@ -417,18 +549,50 @@ print_wazuh_connection_summary() {
   echo "  Do not expose 55000 or 9200 to untrusted networks."
   echo ""
   echo "Internal Docker component names:"
-  echo "  Indexer:   $WAZUH_INDEXER_NODE"
-  echo "  Manager:   $WAZUH_MANAGER_NODE"
-  echo "  Dashboard: $WAZUH_DASHBOARD_NODE"
+  echo "  Indexers:  ${WAZUH_INDEXER_NODES[*]}"
+  echo "  Managers:  ${WAZUH_MANAGER_NODES[*]}"
+  echo "  Dashboard: ${WAZUH_DASHBOARD_NODES[*]}"
+  if [ "${#WAZUH_FRONTEND_NODES[@]}" -gt 0 ]; then
+    echo "  Frontend:  ${WAZUH_FRONTEND_NODES[*]}"
+  fi
   echo "Internal TLS DNS names:"
-  echo "  Indexer:   $WAZUH_INDEXER_DNS"
-  echo "  Manager:   $WAZUH_MANAGER_DNS"
-  echo "  Dashboard: $WAZUH_DASHBOARD_DNS"
+  echo "  Indexer primary:   $WAZUH_INDEXER_DNS"
+  echo "  Manager primary:   $WAZUH_MANAGER_DNS"
+  echo "  Dashboard primary: $WAZUH_DASHBOARD_DNS"
 }
 
 write_wazuh_certificate_config() {
   local CERT_CONFIG_FILE="$1"
   local DASHBOARD_ENDPOINT="$2"
+
+  if [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
+    cat > "$CERT_CONFIG_FILE" <<EOF
+nodes:
+  # Wazuh indexer server nodes
+  indexer:
+    - name: ${WAZUH_INDEXER_NODES[0]}
+      ip: ${WAZUH_INDEXER_NODES[0]}
+    - name: ${WAZUH_INDEXER_NODES[1]}
+      ip: ${WAZUH_INDEXER_NODES[1]}
+    - name: ${WAZUH_INDEXER_NODES[2]}
+      ip: ${WAZUH_INDEXER_NODES[2]}
+
+  # Wazuh server nodes
+  server:
+    - name: ${WAZUH_MANAGER_NODES[0]}
+      ip: ${WAZUH_MANAGER_NODES[0]}
+      node_type: master
+    - name: ${WAZUH_MANAGER_NODES[1]}
+      ip: ${WAZUH_MANAGER_NODES[1]}
+      node_type: worker
+
+  # Wazuh dashboard node
+  dashboard:
+    - name: ${WAZUH_DASHBOARD_NODES[0]}
+      ip: ${WAZUH_DASHBOARD_NODES[0]}
+EOF
+    return 0
+  fi
 
   cat > "$CERT_CONFIG_FILE" <<EOF
 nodes:
@@ -442,7 +606,7 @@ nodes:
     - name: $WAZUH_MANAGER_NODE
       ip: $WAZUH_MANAGER_DNS
 
-  # Public endpoint used by browsers. This keeps the dashboard certificate
+  # Dashboard host used by browsers. This keeps the dashboard certificate
   # aligned with each client's FQDN while preserving the expected file names.
   dashboard:
     - name: $WAZUH_DASHBOARD_NODE
@@ -469,11 +633,19 @@ cert_dir_has_files() {
 
 certificates_match_selected_topology() {
   local CERT_DIR="$1"
+  local CERT_NODE
 
-  [ -f "$CERT_DIR/root-ca.pem" ] && \
-    [ -f "$CERT_DIR/$WAZUH_INDEXER_NODE.pem" ] && \
-    [ -f "$CERT_DIR/$WAZUH_MANAGER_NODE.pem" ] && \
-    [ -f "$CERT_DIR/$WAZUH_DASHBOARD_NODE.pem" ]
+  if [ ! -f "$CERT_DIR/root-ca.pem" ]; then
+    return 1
+  fi
+
+  for CERT_NODE in "${WAZUH_CERT_NODES[@]}"; do
+    if [ ! -f "$CERT_DIR/$CERT_NODE.pem" ]; then
+      return 1
+    fi
+  done
+
+  return 0
 }
 
 expected_certificate_metadata() {
@@ -568,6 +740,72 @@ rewrite_wazuh_node_names() {
   fi
 }
 
+rename_file_if_exists() {
+  local SOURCE="$1"
+  local TARGET="$2"
+
+  if [ ! -e "$SOURCE" ]; then
+    return 0
+  fi
+
+  if [ "$SOURCE" = "$TARGET" ]; then
+    return 0
+  fi
+
+  if [ -e "$TARGET" ]; then
+    echo "Error: target file already exists:"
+    echo "$TARGET"
+    exit 1
+  fi
+
+  mv "$SOURCE" "$TARGET"
+}
+
+rewrite_multi_node_names() {
+  local FILE
+  local -a FILES
+
+  FILES=(
+    "$COMPOSE_FILE"
+    "$STACK_DIR/config/certs.yml"
+    "$STACK_DIR/config/nginx/nginx.conf"
+    "$STACK_DIR/config/wazuh_cluster/wazuh_manager.conf"
+    "$STACK_DIR/config/wazuh_cluster/wazuh_worker.conf"
+    "$STACK_DIR/config/wazuh_dashboard/opensearch_dashboards.yml"
+    "$STACK_DIR/config/wazuh_dashboard/wazuh.yml"
+    "$STACK_DIR/config/wazuh_indexer/wazuh1.indexer.yml"
+    "$STACK_DIR/config/wazuh_indexer/wazuh2.indexer.yml"
+    "$STACK_DIR/config/wazuh_indexer/wazuh3.indexer.yml"
+  )
+
+  for FILE in "${FILES[@]}"; do
+    if [ ! -f "$FILE" ]; then
+      echo "Error: expected Wazuh multi-node configuration file was not found:"
+      echo "$FILE"
+      exit 1
+    fi
+
+    sed -i \
+      -e "s/wazuh1[.]indexer/${WAZUH_INDEXER_NODES[0]}/g" \
+      -e "s/wazuh2[.]indexer/${WAZUH_INDEXER_NODES[1]}/g" \
+      -e "s/wazuh3[.]indexer/${WAZUH_INDEXER_NODES[2]}/g" \
+      -e "s/wazuh[.]master/${WAZUH_MANAGER_NODES[0]}/g" \
+      -e "s/wazuh[.]worker/${WAZUH_MANAGER_NODES[1]}/g" \
+      -e "s/wazuh[.]dashboard/${WAZUH_DASHBOARD_NODES[0]}/g" \
+      "$FILE"
+  done
+
+  rename_file_if_exists \
+    "$STACK_DIR/config/wazuh_indexer/wazuh1.indexer.yml" \
+    "$STACK_DIR/config/wazuh_indexer/${WAZUH_INDEXER_NODES[0]}.yml"
+  rename_file_if_exists \
+    "$STACK_DIR/config/wazuh_indexer/wazuh2.indexer.yml" \
+    "$STACK_DIR/config/wazuh_indexer/${WAZUH_INDEXER_NODES[1]}.yml"
+  rename_file_if_exists \
+    "$STACK_DIR/config/wazuh_indexer/wazuh3.indexer.yml" \
+    "$STACK_DIR/config/wazuh_indexer/${WAZUH_INDEXER_NODES[2]}.yml"
+}
+
 assert_named_component_indexer_tls_target() {
   local FILE
   local BAD_MATCHES=""
@@ -631,14 +869,14 @@ assert_single_node_compose_services() {
   local MISSING_SERVICES=""
   local SERVICE
 
-  for SERVICE in "$WAZUH_INDEXER_NODE" "$WAZUH_MANAGER_NODE" "$WAZUH_DASHBOARD_NODE"; do
+  for SERVICE in "${WAZUH_COMPOSE_SERVICES[@]}"; do
     if ! grep -Eq "^[[:space:]]{2}${SERVICE}:" "$COMPOSE_FILE"; then
       MISSING_SERVICES="$MISSING_SERVICES $SERVICE"
     fi
   done
 
   if [ -n "$MISSING_SERVICES" ]; then
-    echo "Error: the expected three-service Wazuh Docker stack was not found."
+    echo "Error: the expected Wazuh Docker $STACK_SUBDIR stack was not found."
     echo "Missing services:$MISSING_SERVICES"
     echo "Compose file: $COMPOSE_FILE"
     exit 1
@@ -757,6 +995,7 @@ guard_fresh_install_against_existing_docker() {
 check_wazuh_port_availability() {
   local PORT
   local BUSY_PORTS=""
+  local WAZUH_CONTAINERS=""
 
   if ! command -v ss >/dev/null 2>&1; then
     echo "Warning: ss command was not found. Port availability cannot be checked."
@@ -780,6 +1019,28 @@ check_wazuh_port_availability() {
     echo "  55000  Wazuh server API HTTPS"
     echo "  9200   Wazuh indexer API HTTPS"
     echo ""
+    echo "Current listeners on required ports:"
+    ss -H -ltnup 2>/dev/null | awk '$5 ~ /:(443|1514|1515|514|55000|9200)$/ {print "  " $0}' || true
+    echo ""
+
+    if docker_daemon_is_available; then
+      WAZUH_CONTAINERS="$(docker ps -a --filter "name=wazuh" --format '  {{.Names}}	{{.Image}}	{{.Status}}' || true)"
+      if [ -n "$WAZUH_CONTAINERS" ]; then
+        echo "Wazuh-related containers found:"
+        echo "$WAZUH_CONTAINERS"
+        echo ""
+        echo "For a destructive lab reset, stop the installer and run:"
+        echo "  sudo docker ps -a --filter name=wazuh"
+        echo "  sudo docker rm -f <wazuh-container-name> ..."
+        echo "  sudo docker volume ls | grep wazuh"
+        echo "  sudo docker volume rm <wazuh-volume-name> ..."
+        echo "  sudo rm -rf /opt/wazuh"
+        echo ""
+        echo "Do not run these commands on a client environment unless data loss is approved."
+        echo ""
+      fi
+    fi
+
     echo "The installer stops here to avoid breaking existing services or containers."
     exit 1
   fi
@@ -818,7 +1079,7 @@ guard_wazuh_repo_clean() {
   local REPO_DIR="$1"
   local REPO_STATUS
 
-  REPO_STATUS="$(git -C "$REPO_DIR" status --porcelain)"
+  REPO_STATUS="$(git -c "safe.directory=$REPO_DIR" -C "$REPO_DIR" status --porcelain)"
 
   if [ -n "$REPO_STATUS" ]; then
     echo "Error: existing Wazuh Docker repository has local changes:"
@@ -863,6 +1124,8 @@ echo "Wazuh version: $WAZUH_VERSION"
 echo "Deployment: one Docker host/VM PoC/lab only, not production"
 echo ""
 
+select_deployment_stack_mode
+
 select_deployment_topology
 
 configure_named_component_hostnames
@@ -871,11 +1134,15 @@ prompt_local_agent_fim_realtime
 
 echo ""
 echo "Selected topology: $DEPLOYMENT_TOPOLOGY_LABEL"
+echo "Selected deployment mode: $DEPLOYMENT_STACK_LABEL"
 echo "Docker service/container naming:"
-echo "  Indexer:   $WAZUH_INDEXER_NODE"
-echo "  Manager:   $WAZUH_MANAGER_NODE"
-echo "  Dashboard: $WAZUH_DASHBOARD_NODE"
-if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
+echo "  Indexers:  ${WAZUH_INDEXER_NODES[*]}"
+echo "  Managers:  ${WAZUH_MANAGER_NODES[*]}"
+echo "  Dashboard: ${WAZUH_DASHBOARD_NODES[*]}"
+if [ "${#WAZUH_FRONTEND_NODES[@]}" -gt 0 ]; then
+  echo "  Frontend:  ${WAZUH_FRONTEND_NODES[*]}"
+fi
+if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ] || [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
   echo "Internal TLS DNS suffix will be requested after host FQDN detection."
 fi
 echo "Local File Integrity Monitoring (FIM) realtime: $EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME"
@@ -899,31 +1166,47 @@ echo "[1/11] Detecting server FQDN and IP address..."
 
 SERVER_FQDN="$(hostname -f 2>/dev/null || hostname)"
 SERVER_IP="$(hostname -I | awk '{print $1}')"
+SERVER_DNS_SUFFIX=""
 
 if [ -z "$SERVER_FQDN" ]; then
   SERVER_FQDN="$SERVER_IP"
 fi
 
-echo "Detected FQDN: $SERVER_FQDN"
+echo "Detected hostname: $SERVER_FQDN"
 echo "Detected IP:   $SERVER_IP"
 echo "Mode:          $INSTALL_MODE_LABEL"
+echo "Stack:         $DEPLOYMENT_STACK_LABEL"
 echo "Topology:      $DEPLOYMENT_TOPOLOGY_LABEL"
 echo ""
 
 prompt_internal_dns_suffix "$SERVER_FQDN"
 
-if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
+SERVER_DNS_SUFFIX="${WAZUH_INTERNAL_DNS_SUFFIX:-$(host_dns_suffix "$SERVER_FQDN")}"
+if ! is_valid_dns_suffix "$SERVER_DNS_SUFFIX"; then
+  SERVER_DNS_SUFFIX="local"
+fi
+SERVER_FQDN="$(server_fqdn_with_suffix "$SERVER_FQDN" "$SERVER_DNS_SUFFIX")"
+echo "Detected server FQDN: $SERVER_FQDN"
+echo ""
+
+if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ] || [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
   echo "Internal TLS DNS suffix: $WAZUH_INTERNAL_DNS_SUFFIX"
   echo "Internal TLS DNS names:"
-  echo "  Indexer:   $WAZUH_INDEXER_DNS"
-  echo "  Manager:   $WAZUH_MANAGER_DNS"
-  echo "  Dashboard: $WAZUH_DASHBOARD_DNS"
+  if [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
+    echo "  Indexers:  ${WAZUH_INDEXER_NODES[*]}"
+    echo "  Managers:  ${WAZUH_MANAGER_NODES[*]}"
+    echo "  Dashboard: ${WAZUH_DASHBOARD_NODES[*]}"
+  else
+    echo "  Indexer:   $WAZUH_INDEXER_DNS"
+    echo "  Manager:   $WAZUH_MANAGER_DNS"
+    echo "  Dashboard: $WAZUH_DASHBOARD_DNS"
+  fi
   echo ""
 fi
 
 prompt_public_endpoint "$SERVER_FQDN" "$SERVER_IP"
 
-echo "Public endpoint for clients: $PUBLIC_ENDPOINT"
+echo "Dashboard URL for clients: https://$PUBLIC_ENDPOINT"
 check_public_endpoint_resolution "$PUBLIC_ENDPOINT" "$SERVER_IP"
 echo ""
 print_wazuh_connection_summary
@@ -1042,7 +1325,7 @@ echo "[8/11] Preparing Wazuh installation directory..."
 
 WAZUH_DIR="/opt/wazuh"
 REPO_DIR="$WAZUH_DIR/wazuh-docker"
-STACK_DIR="$REPO_DIR/single-node"
+STACK_DIR="$REPO_DIR/$STACK_SUBDIR"
 COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
 
 mkdir -p "$WAZUH_DIR"
@@ -1050,8 +1333,8 @@ mkdir -p "$WAZUH_DIR"
 if [ -d "$REPO_DIR/.git" ]; then
   echo "Existing Wazuh Docker repository found. Updating it..."
   guard_wazuh_repo_clean "$REPO_DIR"
-  git -C "$REPO_DIR" fetch --tags origin
-  git -C "$REPO_DIR" checkout "$WAZUH_VERSION"
+  git -c "safe.directory=$REPO_DIR" -C "$REPO_DIR" fetch --tags origin
+  git -c "safe.directory=$REPO_DIR" -C "$REPO_DIR" checkout "$WAZUH_VERSION"
 elif [ -e "$REPO_DIR" ]; then
   echo "Error: $REPO_DIR already exists but is not a Git repository."
   echo "Move it away or remove it before running this installer again."
@@ -1061,7 +1344,7 @@ else
 fi
 
 if [ ! -f "$COMPOSE_FILE" ]; then
-  echo "Error: Wazuh single-node Docker Compose file was not found:"
+  echo "Error: Wazuh $STACK_SUBDIR Docker Compose file was not found:"
   echo "$COMPOSE_FILE"
   exit 1
 fi
@@ -1071,6 +1354,8 @@ if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
   ensure_named_component_network_aliases
   ensure_compose_container_names
   assert_named_component_indexer_tls_target
+elif [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
+  rewrite_multi_node_names
 fi
 
 assert_single_node_compose_services "$COMPOSE_FILE"
@@ -1081,14 +1366,18 @@ fi
 
 echo "Wazuh directory: $WAZUH_DIR"
 echo "Compose file:    $COMPOSE_FILE"
+echo "Deployment mode: $DEPLOYMENT_STACK_LABEL"
 echo "Docker component names:"
-echo "  $WAZUH_INDEXER_NODE"
-echo "  $WAZUH_MANAGER_NODE"
-echo "  $WAZUH_DASHBOARD_NODE"
+echo "  Indexers:  ${WAZUH_INDEXER_NODES[*]}"
+echo "  Managers:  ${WAZUH_MANAGER_NODES[*]}"
+echo "  Dashboard: ${WAZUH_DASHBOARD_NODES[*]}"
+if [ "${#WAZUH_FRONTEND_NODES[@]}" -gt 0 ]; then
+  echo "  Frontend:  ${WAZUH_FRONTEND_NODES[*]}"
+fi
 echo "Internal TLS DNS names:"
-echo "  $WAZUH_INDEXER_DNS"
-echo "  $WAZUH_MANAGER_DNS"
-echo "  $WAZUH_DASHBOARD_DNS"
+echo "  Indexer primary:   $WAZUH_INDEXER_DNS"
+echo "  Manager primary:   $WAZUH_MANAGER_DNS"
+echo "  Dashboard primary: $WAZUH_DASHBOARD_DNS"
 if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
   echo "Fixed container names: enabled"
 else
@@ -1115,21 +1404,21 @@ if certificates_match_selected_topology "$CERT_DIR"; then
     echo "Expected metadata:"
     echo "  $(expected_certificate_metadata)"
     echo ""
-    echo "Move the existing certificate directory away before changing topology or public endpoint."
+    echo "Move the existing certificate directory away before changing topology or dashboard host."
     exit 1
   fi
 elif cert_dir_has_files "$CERT_DIR"; then
   echo "Error: existing Wazuh certificate files do not match the selected topology."
   echo "Certificate directory: $CERT_DIR"
   echo "Expected certificate files:"
-  echo "  $WAZUH_INDEXER_NODE.pem"
-  echo "  $WAZUH_MANAGER_NODE.pem"
-  echo "  $WAZUH_DASHBOARD_NODE.pem"
+  for CERT_NODE in "${WAZUH_CERT_NODES[@]}"; do
+    echo "  $CERT_NODE.pem"
+  done
   echo ""
   echo "Move the existing certificate directory away before changing topology."
   exit 1
 else
-  docker compose -f generate-indexer-certs.yml run --rm generator
+  docker compose -f generate-indexer-certs.yml run --rm -T --interactive=false generator
   write_certificate_metadata "$CERT_METADATA_FILE"
 fi
 
@@ -1140,7 +1429,7 @@ echo "[10/11] Final confirmation before starting Wazuh containers..."
 
 echo ""
 echo "The next step will pull Wazuh Docker images, generate/use local volumes,"
-echo "and start the Wazuh single-node stack from:"
+echo "and start the Wazuh $STACK_SUBDIR stack from:"
 echo "  $COMPOSE_FILE"
 echo ""
 read -r -p "Start Wazuh containers now? [y/N]: " CONFIRM_START
@@ -1202,6 +1491,63 @@ wait_for_service() {
       echo ""
       echo "Current container status:"
       docker compose -f "$COMPOSE_FILE" ps
+      exit 1
+    fi
+
+    sleep "$SLEEP_SECONDS"
+    ATTEMPT=$((ATTEMPT + 1))
+  done
+}
+
+wait_for_manager_runtime() {
+  local MANAGER_CONTAINER
+  local ATTEMPT=1
+  local MAX_ATTEMPTS=80
+  local SLEEP_SECONDS=5
+
+  while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
+    MANAGER_CONTAINER="$(manager_container_id)"
+
+    if [ -n "$MANAGER_CONTAINER" ] && \
+      docker exec "$MANAGER_CONTAINER" test -f /etc/filebeat/filebeat.yml >/dev/null 2>&1 && \
+      docker exec "$MANAGER_CONTAINER" test -f /var/ossec/etc/ossec.conf >/dev/null 2>&1; then
+      echo "$WAZUH_MANAGER_NODE runtime is ready."
+      return 0
+    fi
+
+    echo "$WAZUH_MANAGER_NODE runtime not ready yet - attempt $ATTEMPT/$MAX_ATTEMPTS"
+
+    if [ "$ATTEMPT" -eq "$MAX_ATTEMPTS" ]; then
+      echo ""
+      echo "Error: $WAZUH_MANAGER_NODE runtime did not become ready in time."
+      echo ""
+      docker compose -f "$COMPOSE_FILE" logs --tail=150 "$WAZUH_MANAGER_NODE"
+      exit 1
+    fi
+
+    sleep "$SLEEP_SECONDS"
+    ATTEMPT=$((ATTEMPT + 1))
+  done
+}
+
+wait_for_indexer_api() {
+  local ATTEMPT=1
+  local MAX_ATTEMPTS=80
+  local SLEEP_SECONDS=5
+
+  while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
+    if curl -fsSk -u admin:SecretPassword "https://localhost:9200" >/dev/null 2>&1; then
+      echo "$WAZUH_INDEXER_NODE API is ready."
+      return 0
+    fi
+
+    echo "$WAZUH_INDEXER_NODE API not ready yet - attempt $ATTEMPT/$MAX_ATTEMPTS"
+
+    if [ "$ATTEMPT" -eq "$MAX_ATTEMPTS" ]; then
+      echo ""
+      echo "Error: $WAZUH_INDEXER_NODE API did not become ready in time."
+      echo ""
+      docker compose -f "$COMPOSE_FILE" logs --tail=150 "$WAZUH_INDEXER_NODE"
       exit 1
     fi
 
@@ -1297,6 +1643,7 @@ ensure_running_filebeat_tls_endpoint() {
     echo "Recreating Wazuh manager so Filebeat keeps the corrected endpoint..."
     docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$WAZUH_MANAGER_NODE"
     wait_for_service "$WAZUH_MANAGER_NODE"
+    wait_for_manager_runtime
     return 0
   fi
 
@@ -1421,9 +1768,11 @@ configure_local_agent_fim_realtime() {
   echo "Monitored realtime paths: /etc, /usr/bin, /usr/sbin"
 }
 
-wait_for_service "$WAZUH_INDEXER_NODE"
-wait_for_service "$WAZUH_MANAGER_NODE"
-wait_for_service "$WAZUH_DASHBOARD_NODE"
+for SERVICE in "${WAZUH_COMPOSE_SERVICES[@]}"; do
+  wait_for_service "$SERVICE"
+done
+wait_for_indexer_api
+wait_for_manager_runtime
 
 ensure_running_filebeat_tls_endpoint
 validate_named_component_indexer_flow
@@ -1443,13 +1792,22 @@ echo "Wazuh dashboard should be available at:"
 echo ""
 echo "  https://$PUBLIC_ENDPOINT"
 echo ""
+echo "Detected server identity:"
+echo "  Dashboard URL:   https://$PUBLIC_ENDPOINT"
+echo "  FQDN:            $SERVER_FQDN"
+echo "  IP:              $SERVER_IP"
+echo ""
 print_wazuh_connection_summary
 echo ""
 echo "Deployed topology:"
-echo "  $DEPLOYMENT_TOPOLOGY_LABEL"
-echo "  Indexer:   $WAZUH_INDEXER_NODE"
-echo "  Manager:   $WAZUH_MANAGER_NODE"
-echo "  Dashboard: $WAZUH_DASHBOARD_NODE"
+echo "  Mode:      $DEPLOYMENT_STACK_LABEL"
+echo "  Naming:    $DEPLOYMENT_TOPOLOGY_LABEL"
+echo "  Indexers:  ${WAZUH_INDEXER_NODES[*]}"
+echo "  Managers:  ${WAZUH_MANAGER_NODES[*]}"
+echo "  Dashboard: ${WAZUH_DASHBOARD_NODES[*]}"
+if [ "${#WAZUH_FRONTEND_NODES[@]}" -gt 0 ]; then
+  echo "  Frontend:  ${WAZUH_FRONTEND_NODES[*]}"
+fi
 echo ""
 echo "Port information:"
 echo "  HTTPS uses the standard port 443, so no port needs to be added"
@@ -1460,6 +1818,13 @@ if [ -n "$SERVER_IP" ] && [ "$SERVER_IP" != "$PUBLIC_ENDPOINT" ]; then
   echo "Alternative URL using the server IP:"
   echo ""
   echo "  https://$SERVER_IP"
+  echo ""
+fi
+
+if is_valid_fqdn "$SERVER_FQDN" && [ "$SERVER_FQDN" != "$PUBLIC_ENDPOINT" ]; then
+  echo "Alternative URL using the detected FQDN:"
+  echo ""
+  echo "  https://$SERVER_FQDN"
   echo ""
 fi
 
@@ -1477,9 +1842,17 @@ echo "  also includes internal service credentials."
 echo ""
 echo "Certificate warning:"
 echo "  If your browser displays a certificate warning, this is expected with"
-echo "  the self-signed certificates generated for this PoC single-node stack."
-echo "  For any environment beyond a PoC, review the official Wazuh certificate"
-echo "  documentation and use certificates trusted by your organization."
+echo "  the self-signed certificates generated for this PoC $STACK_SUBDIR stack."
+echo "  Before using this deployment with real endpoints or exposing it to users,"
+echo "  replace the self-signed certificates with official certificates trusted"
+echo "  by the client organization or by a recognized certificate authority."
+echo "  Review the official Wazuh certificate documentation before replacing"
+echo "  certificates."
+echo ""
+echo "Required next steps before client use:"
+echo "  1. Change the default Wazuh passwords using the official Wazuh procedure."
+echo "  2. Replace self-signed certificates with trusted official certificates."
+echo "  3. Restrict exposed ports to approved admin, agent, API, and syslog networks."
 echo ""
 echo "Useful commands:"
 echo ""

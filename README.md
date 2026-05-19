@@ -14,12 +14,26 @@ The stack uses three separate Wazuh component images and containers on the same 
 
 This separation is intentional. It keeps the Wazuh roles, logs, volumes, and configuration boundaries visible from the first PoC. It also makes future analysis easier if the customer later wants to move, scale, or redesign one layer independently.
 
-The installer can deploy this stack with either the official Wazuh Docker service names, or with clearer fixed component names for lab deployments:
+The installer lets the user choose between the official Wazuh Docker `single-node` and `multi-node` compose stacks. The default and recommended choice is `multi-node`, because it is closer to a scalable architecture while still running on one Docker host/VM.
+
+Single-node uses the official service names:
 
 ```text
-wazuh-indexer01
-wazuh-manager01
-wazuh-dashboard01
+wazuh.indexer
+wazuh.manager
+wazuh.dashboard
+```
+
+Multi-node uses clearer numbered FQDN service names generated from the internal TLS DNS suffix:
+
+```text
+wazuh-indexer01.<suffix>
+wazuh-indexer02.<suffix>
+wazuh-indexer03.<suffix>
+wazuh-manager01.<suffix>
+wazuh-manager02.<suffix>
+wazuh-dashboard01.<suffix>
+nginx
 ```
 
 ## Disclaimer
@@ -135,13 +149,27 @@ Run the installer with sudo:
 sudo ./Wazuh-installer.sh
 ```
 
-The installer asks for the public FQDN or IP address that clients will use to reach the Wazuh VM. For repeatable test deployments, you can provide it non-interactively:
+The installer asks for the dashboard FQDN or IP address that clients will use to reach the Wazuh VM. This value is printed at the end as the Wazuh dashboard URL. For repeatable test deployments, you can provide it non-interactively:
 
 ```bash
 sudo WAZUH_PUBLIC_FQDN=wazuh.example.com ./Wazuh-installer.sh
 ```
 
-This value is used for the dashboard URL and for the generated dashboard certificate configuration. Internal container-to-container traffic uses the service names selected by the topology choice.
+This value is used for the dashboard URL shown to users and agents. Internal container-to-container traffic uses the service names selected by the deployment mode.
+
+If the VM hostname has no domain, for example `VM-Wazuh`, the installer builds a default dashboard FQDN by appending the default DNS suffix:
+
+```text
+VM-Wazuh.local
+```
+
+You can change that suffix for client deployments:
+
+```bash
+sudo WAZUH_PUBLIC_DNS_SUFFIX=customer.example ./Wazuh-installer.sh
+```
+
+At the end of the deployment, the installer prints the detected server FQDN, detected server IP, and the exact dashboard URL to open in the browser.
 
 At startup, the script asks which installation mode to use:
 
@@ -150,43 +178,18 @@ At startup, the script asks which installation mode to use:
 2) Existing Docker environment - keep current Docker installation
 ```
 
-The script then asks which Wazuh Docker topology to use:
+The script then asks which Wazuh Docker deployment mode to use:
 
 ```text
-1) Official Wazuh Docker names - default service/container names
-2) Three named components - manager, indexer, dashboard as separate containers/images
+1) single-node - lab/small PoC on one Docker host
+2) multi-node - recommended default for scalable Wazuh Docker deployments
 ```
 
-Both choices run the Wazuh manager, indexer, and dashboard on the same Docker host for PoC/lab use. The difference is naming:
+Pressing `Enter` selects `multi-node`.
 
-- `Official Wazuh Docker names` keeps the official service names: `wazuh.indexer`, `wazuh.manager`, and `wazuh.dashboard`.
-- `Three named components` rewrites the stack to use `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01` as service names and fixed container names. The manager, indexer, and dashboard keep their separate Wazuh Docker images.
+The script asks for confirmation before continuing with the selected installation mode and deployment mode. It also asks for a final confirmation before starting the Wazuh containers. The script explicitly reminds the user that this is a one Docker host/VM PoC deployment, not a production deployment.
 
-When `Three named components` is selected, the script asks whether to customize the component hostnames:
-
-```text
-Customize component hostnames? [y/N]:
-Indexer hostname [wazuh-indexer01]:
-Manager hostname [wazuh-manager01]:
-Dashboard hostname [wazuh-dashboard01]:
-```
-
-If the user accepts the defaults, the installer keeps `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01`. Hostname values must be DNS labels without dots or underscores. The internal TLS FQDNs are then built by combining each hostname with the selected internal DNS suffix.
-
-The component hostnames can also be provided non-interactively:
-
-```bash
-sudo WAZUH_INDEXER_HOSTNAME=wazuh-indexer01 \
-  WAZUH_MANAGER_HOSTNAME=wazuh-manager01 \
-  WAZUH_DASHBOARD_HOSTNAME=wazuh-dashboard01 \
-  WAZUH_INTERNAL_DNS_SUFFIX=lab.example \
-  WAZUH_PUBLIC_FQDN=wazuh.lab.example \
-  ./Wazuh-installer.sh
-```
-
-The script asks for confirmation before continuing with the selected mode and topology. It also asks for a final confirmation before starting the Wazuh containers. The script explicitly reminds the user that this is a one Docker host/VM PoC deployment, not a production deployment.
-
-In fresh Debian mode, the script installs Docker, configures the Wazuh indexer kernel requirement, clones the official Wazuh Docker repository, generates self-signed certificates, starts the single-node stack, and prints the access information at the end.
+In fresh Debian mode, the script installs Docker, configures the Wazuh indexer kernel requirement, clones the official Wazuh Docker repository, generates self-signed certificates, starts the selected Wazuh Docker stack, and prints the access information at the end.
 
 In existing Docker mode, the script checks that Docker and the Docker Compose plugin are already available before continuing. It does not remove or reinstall Docker packages.
 
@@ -208,15 +211,18 @@ wazuh.lab.example  A/AAAA  <WAZUH_VM_IP>
 
 This is the only DNS record required by this PoC Docker deployment. Use the customer's real FQDN and VM IP address. The selected FQDN is what users enter in their browser and what agents can use to reach the Wazuh manager ports on the VM.
 
-When the `Three named components` topology is selected, `wazuh-indexer01`, `wazuh-manager01`, and `wazuh-dashboard01` are Docker service/container names inside the Docker network. They do not require public DNS records for this single-VM deployment.
+Internal Wazuh component traffic stays inside the Docker network. In single-node mode, the installer keeps the official Wazuh Docker service names. In multi-node mode, the installer rewrites the official stack to use numbered FQDN service names such as `wazuh-indexer01.local`, `wazuh-manager01.local`, and `wazuh-dashboard01.local`.
 
-The Wazuh certificate generator requires DNS values with a domain suffix. For the named component topology, the script asks for an internal TLS DNS suffix. By default, it uses the domain part of the VM hostname when available, otherwise it uses `local`.
+The Wazuh certificate generator requires DNS values with a domain suffix. For multi-node, the script asks for an internal TLS DNS suffix after detecting the host FQDN. By default, it uses the domain part of the VM hostname when available, otherwise it uses `local`.
 
-For example, with the default component hostnames and the suffix `lab.example`, the internal Docker TLS aliases are:
+For example, with suffix `lab.example`, the internal multi-node names are:
 
 ```text
 wazuh-indexer01.lab.example
+wazuh-indexer02.lab.example
+wazuh-indexer03.lab.example
 wazuh-manager01.lab.example
+wazuh-manager02.lab.example
 wazuh-dashboard01.lab.example
 ```
 
@@ -226,19 +232,9 @@ The suffix can also be provided non-interactively:
 sudo WAZUH_INTERNAL_DNS_SUFFIX=lab.example WAZUH_PUBLIC_FQDN=wazuh.lab.example ./Wazuh-installer.sh
 ```
 
-These names are Docker network aliases only. They do not require public DNS records unless the deployment is redesigned later for multiple VMs.
+These internal names are Docker service names inside the generated compose stack for this one-host PoC. They do not require public DNS records unless the deployment is redesigned later across multiple VMs.
 
-Internal Wazuh component traffic stays inside the Docker network and uses the selected service names. This means the public FQDN is for users and agents reaching the VM, not for dashboard-to-indexer or manager-to-indexer communication.
-
-For named components, the manager, Filebeat, and dashboard indexer clients must use the same internal indexer DNS name that appears in the indexer certificate SAN. For example:
-
-```text
-https://wazuh-indexer01.lab.example:9200
-```
-
-Using only the Docker service name, such as `https://wazuh-indexer01:9200`, can resolve correctly but still fail TLS verification because the certificate is issued for the internal FQDN. The installer rewrites the generated Wazuh configuration to use the internal TLS DNS name and validates Filebeat output after startup.
-
-If certificates already exist under `/opt/wazuh/wazuh-docker/single-node/config/wazuh_indexer_ssl_certs`, the script keeps them only when they match the selected topology and public endpoint metadata. If you change topology or FQDN between runs, move the existing certificate directory away before generating new certificates.
+If certificates already exist under `/opt/wazuh/wazuh-docker/<single-node-or-multi-node>/config/wazuh_indexer_ssl_certs`, the script keeps them only when they match the selected dashboard host metadata. If you change the dashboard FQDN/IP between runs, move the existing certificate directory away before generating new certificates.
 
 ## Docker safety checks
 
@@ -312,7 +308,7 @@ The `-v` and `--volumes` options remove Docker volumes. Removing volumes can del
 After installation, the Wazuh dashboard is available at:
 
 ```text
-https://<public-fqdn-or-ip>
+https://<dashboard-fqdn-or-ip>
 ```
 
 If the public FQDN is not available or not resolvable from your browser, use the server IP address instead:
@@ -322,6 +318,79 @@ https://<server-ip>
 ```
 
 The official single-node Docker Compose configuration exposes the dashboard on HTTPS port `443`.
+
+The installer prints the final dashboard URL with `https://` at the end of the run, together with the detected server FQDN and IP address.
+
+## Backup and restore
+
+Use `Backup_Wazuh-Config.sh` to back up or restore Wazuh configuration, with an optional client/runtime data backup.
+
+Run it interactively:
+
+```bash
+sudo ./Backup_Wazuh-Config.sh
+```
+
+The script first asks whether to back up or restore:
+
+```text
+1) Backup Wazuh
+2) Restore Wazuh
+```
+
+It then asks which Wazuh Docker stack type to use:
+
+```text
+1) single-node
+2) multi-node
+```
+
+Backup scope:
+
+```text
+1) Wazuh configuration only - no client/runtime data
+2) Wazuh configuration and client/runtime data from Docker volumes
+```
+
+Restore scope:
+
+```text
+1) Restore Wazuh configuration only - no client/runtime data
+2) Restore Wazuh configuration and client/runtime data from Docker volumes
+```
+
+Configuration-only backup saves the Docker Compose file, Wazuh Docker `config/` directory, local agent configuration if present, and a metadata/config archive. It does not back up client alerts, indexed events, dashboard state, queues, or other Docker volume data.
+
+Client/runtime data backup archives matching Wazuh Docker volumes into:
+
+```text
+/opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS/docker-volumes/
+```
+
+For consistent client/runtime data backups or restores, stop the Wazuh containers first:
+
+```bash
+sudo docker compose -f /opt/wazuh/wazuh-docker/single-node/docker-compose.yml down
+```
+
+or for multi-node:
+
+```bash
+sudo docker compose -f /opt/wazuh/wazuh-docker/multi-node/docker-compose.yml down
+```
+
+Do not use `down -v` unless you intentionally want to delete Docker volume data.
+
+Non-interactive examples:
+
+```bash
+sudo ACTION=backup STACK_TYPE=single-node BACKUP_CLIENT_DATA=no ./Backup_Wazuh-Config.sh
+sudo ACTION=backup STACK_TYPE=multi-node BACKUP_CLIENT_DATA=yes ./Backup_Wazuh-Config.sh
+sudo ACTION=restore RESTORE_DIR=/opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS RESTORE_CLIENT_DATA=no ./Backup_Wazuh-Config.sh
+sudo ACTION=restore RESTORE_DIR=/opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS RESTORE_CLIENT_DATA=yes ./Backup_Wazuh-Config.sh
+```
+
+Restoring client/runtime data overwrites matching Docker volumes from the selected backup. The script displays warnings and asks for confirmation before restoring.
 
 ## Ports
 
@@ -344,6 +413,128 @@ https://<public-fqdn-or-ip>
 
 Only specify a port if you changed the Docker Compose port mapping manually.
 
+## Integrating an existing syslog source
+
+Wazuh can receive syslog messages from existing network equipment, servers, firewalls, switches, routers, or a central syslog relay.
+
+In this Docker PoC stack, UDP port `514` is published by the Wazuh manager container. The syslog source must send logs to the Wazuh dashboard FQDN/IP shown at the end of the installer, on UDP port `514`.
+
+Example target from a syslog sender:
+
+```text
+Destination host: <wazuh-dashboard-fqdn-or-ip>
+Destination port: 514
+Protocol:         UDP
+Format:           syslog / RFC3164 or RFC5424 depending on the source
+```
+
+Before enabling syslog ingestion, confirm the client-approved source IP ranges. Do not accept syslog from untrusted networks.
+
+### Wazuh manager configuration
+
+Back up the current Wazuh configuration first:
+
+```bash
+sudo ./Backup_Wazuh-Config.sh
+```
+
+For single-node, edit:
+
+```bash
+sudo nano /opt/wazuh/wazuh-docker/single-node/config/wazuh_cluster/wazuh_manager.conf
+```
+
+For multi-node, configure the manager node that will receive syslog traffic. Depending on the design, this can be the master or one or more workers:
+
+```bash
+sudo nano /opt/wazuh/wazuh-docker/multi-node/config/wazuh_cluster/wazuh_manager.conf
+sudo nano /opt/wazuh/wazuh-docker/multi-node/config/wazuh_cluster/wazuh_worker.conf
+```
+
+Add a syslog `<remote>` block inside `<ossec_config>`, next to the existing `<remote>` block:
+
+```xml
+  <remote>
+    <connection>syslog</connection>
+    <port>514</port>
+    <protocol>udp</protocol>
+    <allowed-ips>192.0.2.10</allowed-ips>
+    <local_ip>0.0.0.0</local_ip>
+  </remote>
+```
+
+Replace `192.0.2.10` with the real syslog sender IP address. Add one `<allowed-ips>` entry per trusted sender or subnet if needed:
+
+```xml
+    <allowed-ips>192.0.2.10</allowed-ips>
+    <allowed-ips>198.51.100.0/24</allowed-ips>
+```
+
+Use TCP only if the sender is explicitly configured for TCP syslog and the Docker Compose port mapping also publishes TCP `514`. The default Easy-wazuh/Wazuh Docker mapping is UDP `514`.
+
+### Restart Wazuh manager
+
+Single-node:
+
+```bash
+sudo docker compose -f /opt/wazuh/wazuh-docker/single-node/docker-compose.yml up -d --force-recreate wazuh.manager
+```
+
+For the exact manager service name in the selected stack, run:
+
+```bash
+sudo docker compose -f /opt/wazuh/wazuh-docker/single-node/docker-compose.yml config --services
+```
+
+Multi-node:
+
+```bash
+sudo docker compose -f /opt/wazuh/wazuh-docker/multi-node/docker-compose.yml up -d --force-recreate <manager-service-name>
+```
+
+Replace `<manager-service-name>` with the manager service that receives syslog. In multi-node this can be a FQDN service name such as `wazuh-manager01.local` or `wazuh-manager02.local`, depending on the suffix selected during deployment.
+
+### Firewall and Docker filtering
+
+Allow UDP `514` only from approved syslog sender networks. If using the `DOCKER-USER` filtering approach documented below, add the syslog source subnet to the UDP `514` allow rule:
+
+```bash
+sudo iptables -I DOCKER-USER 5 -i <EXTERNAL_INTERFACE> -p udp --dport 514 -s <SYSLOG_SUBNET> -j ACCEPT
+```
+
+Keep the final UDP `514` drop rule for all other sources.
+
+### Validation
+
+From a Linux syslog sender, send a test message:
+
+```bash
+logger -n <wazuh-dashboard-fqdn-or-ip> -P 514 -d "easy-wazuh syslog test"
+```
+
+Follow the manager logs:
+
+```bash
+sudo docker compose -f /opt/wazuh/wazuh-docker/single-node/docker-compose.yml logs -f wazuh.manager
+```
+
+Check alerts in the indexer:
+
+```bash
+curl -sk -u admin:SecretPassword "https://localhost:9200/_cat/indices/wazuh-alerts-*?v"
+```
+
+Then search the Wazuh dashboard for the test message or for events coming from the syslog source IP.
+
+If no event appears, check:
+
+- the sender really sends to UDP `514`
+- the VM firewall and `DOCKER-USER` rules allow the sender IP
+- the Docker Compose file publishes `514/udp`
+- the Wazuh manager config contains `<connection>syslog</connection>`
+- the manager container was recreated after the config change
+- the syslog format has a decoder/rule that creates visible alerts
+
 ## Fixing missing alerts index template
 
 If the dashboard shows this error after login:
@@ -359,42 +550,20 @@ The installer now validates Filebeat output, uploads the Wazuh ingest pipelines,
 uploads the alerts index template, and checks that the template matching
 `wazuh-alerts-*` exists before reporting a successful installation.
 
-For the named component topology, Filebeat must use the internal TLS DNS name
-from the indexer certificate. For example, if the internal suffix is `local`,
-Filebeat must use:
-
-```text
-https://wazuh-indexer01.local:9200
-```
-
-not:
-
-```text
-https://wazuh-indexer01:9200
-```
-
-The installer checks and fixes the active `/etc/filebeat/filebeat.yml` inside the
-manager container because Wazuh Docker can initialize this file from the
+The installer validates Filebeat output inside the manager container because
+Wazuh Docker can initialize `/etc/filebeat/filebeat.yml` from the
 `single-node_filebeat_etc` Docker volume.
 
-For an existing deployment, run the following commands from the Wazuh VM:
+For an existing single-node deployment, run the following commands from the Wazuh VM:
 
 ```bash
 COMPOSE=/opt/wazuh/wazuh-docker/single-node/docker-compose.yml
-sudo sed -i 's#https://wazuh-indexer01:9200#https://wazuh-indexer01.local:9200#g; s#=wazuh-indexer01:9200#=wazuh-indexer01.local:9200#g; s#- wazuh-indexer01:9200#- wazuh-indexer01.local:9200#g' "$COMPOSE"
-sudo docker compose -f "$COMPOSE" up -d --force-recreate wazuh-manager01
-sudo docker exec wazuh-manager01 filebeat test output
-sudo docker exec wazuh-manager01 filebeat setup --pipelines
-sudo docker exec wazuh-manager01 filebeat setup --index-management -E output.logstash.enabled=false
+MANAGER_CONTAINER="$(sudo docker compose -f "$COMPOSE" ps -q wazuh.manager)"
+sudo docker exec "$MANAGER_CONTAINER" filebeat test output
+sudo docker exec "$MANAGER_CONTAINER" filebeat setup --pipelines
+sudo docker exec "$MANAGER_CONTAINER" filebeat setup --index-management -E output.logstash.enabled=false
 curl -sk -u admin:SecretPassword https://localhost:9200/_template/wazuh
 curl -sk -u admin:SecretPassword https://localhost:9200/_cat/indices/wazuh-alerts-*?v
-```
-
-If you used the official Wazuh Docker names instead of named components, replace
-`wazuh-manager01` with the manager container name shown by:
-
-```bash
-sudo docker ps --format "table {{.Names}}\t{{.Status}}"
 ```
 
 On a fresh deployment without enrolled agents, `wazuh-alerts-*` indices may still
@@ -476,7 +645,7 @@ Then test from allowed and denied source networks. The deployment should be cons
 
 ## Certificates
 
-The Wazuh Docker stack requires certificates to secure communication between Wazuh components. This installer uses the official `wazuh-certs-generator` Docker image to generate Wazuh self-signed certificates for the single-node stack.
+The Wazuh Docker stack requires certificates to secure communication between Wazuh components. This installer uses the official `wazuh-certs-generator` Docker image to generate Wazuh self-signed certificates for the selected stack.
 
 Browsers will usually display a security warning when accessing the Wazuh dashboard with these self-signed certificates.
 
