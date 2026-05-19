@@ -321,6 +321,65 @@ The official single-node Docker Compose configuration exposes the dashboard on H
 
 The installer prints the final dashboard URL with `https://` at the end of the run, together with the detected server FQDN and IP address.
 
+## Agent deployment with Ansible
+
+Use `Deploy_Wazuh-Agent-Ansible.sh` to generate an Ansible inventory and playbook for deploying Wazuh agents on Linux endpoints.
+
+Run it interactively:
+
+```bash
+./Deploy_Wazuh-Agent-Ansible.sh
+```
+
+The script asks for the Wazuh manager FQDN that agents will use. The value must include the domain:
+
+```text
+wazuh.customer.example
+```
+
+An IP address or a short hostname such as `wazuh` is intentionally rejected. Agents need a stable FQDN that resolves to the Wazuh server or to the load-balanced agent endpoint.
+
+Generated files:
+
+```text
+ansible-wazuh-agent-deploy/
+  deploy-wazuh-agent.yml
+  inventory.ini
+  group_vars/wazuh_agents.yml
+```
+
+Edit `inventory.ini` and add Linux endpoints under `[wazuh_agents]`, then run:
+
+```bash
+ansible-playbook -i ansible-wazuh-agent-deploy/inventory.ini ansible-wazuh-agent-deploy/deploy-wazuh-agent.yml
+```
+
+Non-interactive example:
+
+```bash
+WAZUH_MANAGER_FQDN=wazuh.customer.example \
+ANSIBLE_PROJECT_DIR=./customer-wazuh-agents \
+RUN_ANSIBLE_PLAYBOOK=no \
+./Deploy_Wazuh-Agent-Ansible.sh
+```
+
+Optional variables:
+
+```bash
+WAZUH_AGENT_GROUP=linux
+WAZUH_DISABLE_REPO_AFTER_INSTALL=yes
+```
+
+The generated playbook follows the official Linux package deployment flow: it configures the Wazuh package repository, installs `wazuh-agent` with `WAZUH_MANAGER=<fqdn>`, enables and starts the `wazuh-agent` service, then prints the agent status.
+
+Network and security requirements:
+
+- the Ansible control host must have SSH access to endpoints
+- endpoints must resolve the Wazuh manager FQDN
+- endpoints must reach the Wazuh server on TCP `1514` and TCP `1515`
+- do not store SSH passwords or enrollment secrets in plain text inventory files
+- use Ansible Vault for secrets if enrollment passwords or privileged credentials are needed
+
 ## Backup and restore
 
 Use `Backup_Wazuh-Config.sh` to back up or restore Wazuh configuration, with an optional client/runtime data backup.
