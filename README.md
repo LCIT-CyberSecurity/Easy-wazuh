@@ -397,7 +397,7 @@ The script first asks whether to back up or restore:
 2) Restore Wazuh
 ```
 
-It then asks which Wazuh Docker stack type to use:
+It then detects the Wazuh Docker stack type automatically when there is no ambiguity. It first checks existing Docker Compose resources, then falls back to installed stack files if only one stack is present. If both stacks are possible or neither can be detected, it asks which stack type to use:
 
 ```text
 1) single-node
@@ -428,9 +428,15 @@ Client/runtime data backup archives matching Wazuh Docker volumes into:
 
 Backup directories are created with root-only permissions because they can contain Wazuh certificates, private keys, local agent configuration, alerts, indexed events, and other client data.
 
+The default backup destination is on the Wazuh VM itself. For backups that include client/runtime data, use a destination with enough free space, for example a mounted backup disk or remote backup path via `BACKUP_ROOT`. Keeping large backups under `/opt/easy-wazuh-backups` can fill the same filesystem used by Wazuh and Docker.
+
 During restore, Docker volume archives are checked before extraction. Archives containing absolute paths or `..` path traversal entries are rejected. Restore only backups from trusted Easy-wazuh runs, especially when restoring client/runtime data.
 
-For consistent client/runtime data backups or restores, stop the Wazuh containers first:
+For client/runtime data backups, the script stops running Wazuh containers before archiving Docker volumes, then restarts the services it stopped after the backup. This avoids capturing volume data while Wazuh is writing to it.
+
+For restores with client/runtime data, the script also stops running Wazuh containers before overwriting Docker volumes, then restarts the services it stopped after the restore.
+
+If you need to stop the stack manually for maintenance, use:
 
 ```bash
 sudo docker compose -f /opt/wazuh/wazuh-docker/single-node/docker-compose.yml down

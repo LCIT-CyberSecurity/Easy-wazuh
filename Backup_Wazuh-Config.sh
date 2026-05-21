@@ -15,6 +15,10 @@ ACTION="${ACTION:-}"
 BACKUP_CLIENT_DATA="${BACKUP_CLIENT_DATA:-}"
 RESTORE_DIR="${RESTORE_DIR:-}"
 RESTORE_CLIENT_DATA="${RESTORE_CLIENT_DATA:-}"
+ALLOW_PARTIAL_VOLUME_RESTORE="${ALLOW_PARTIAL_VOLUME_RESTORE:-no}"
+STOPPED_RUNNING_SERVICES=""
+RESTORED_VOLUME_COUNT=0
+MISSING_VOLUME_ARCHIVE_COUNT=0
 
 echo "=================================================="
 echo " Easy-wazuh backup"
@@ -74,11 +78,24 @@ restore_if_exists() {
 
   if [ -e "$SOURCE" ]; then
     mkdir -p "$(dirname "$TARGET")"
-    cp -a "$SOURCE" "$TARGET"
+    if [ -d "$SOURCE" ] && [ ! -L "$SOURCE" ]; then
+      rm -rf "$TARGET"
+      mkdir -p "$TARGET"
+      cp -a "$SOURCE"/. "$TARGET"/
+    else
+      rm -rf "$TARGET"
+      cp -a "$SOURCE" "$TARGET"
+    fi
     echo "Restored: $TARGET"
   else
     echo "Skipped, not found in backup: $SOURCE"
   fi
+}
+
+print_disk_space() {
+  local PATH_TO_CHECK="$1"
+
+  df -h "$PATH_TO_CHECK" 2>/dev/null | sed 's/^/  /' || true
 }
 
 docker_is_available() {
@@ -87,6 +104,26 @@ docker_is_available() {
 
 docker_daemon_is_available() {
   docker_is_available && docker info >/dev/null 2>&1
+}
+
+docker_compose_project_has_resources() {
+  local PROJECT_NAME="$1"
+
+  docker_daemon_is_available || return 1
+
+  if docker ps -a \
+    --filter "label=com.docker.compose.project=$PROJECT_NAME" \
+    --format '{{.ID}}' | sed -n '1p' | grep -q .; then
+    return 0
+  fi
+
+  if docker volume ls \
+    --filter "label=com.docker.compose.project=$PROJECT_NAME" \
+    --format '{{.Name}}' | sed -n '1p' | grep -q .; then
+    return 0
+  fi
+
+  return 1
 }
 
 set_stack_type() {
@@ -110,11 +147,70 @@ set_stack_type() {
   fi
 }
 
+auto_detect_stack_type() {
+  local SINGLE_STACK_DIR="$WAZUH_DIR/wazuh-docker/single-node"
+  local MULTI_STACK_DIR="$WAZUH_DIR/wazuh-docker/multi-node"
+  local SINGLE_HAS_DOCKER_RESOURCES="no"
+  local MULTI_HAS_DOCKER_RESOURCES="no"
+  local SINGLE_HAS_COMPOSE_FILE="no"
+  local MULTI_HAS_COMPOSE_FILE="no"
+
+  if docker_compose_project_has_resources "single-node"; then
+    SINGLE_HAS_DOCKER_RESOURCES="yes"
+  fi
+
+  if docker_compose_project_has_resources "multi-node"; then
+    MULTI_HAS_DOCKER_RESOURCES="yes"
+  fi
+
+  if [ "$SINGLE_HAS_DOCKER_RESOURCES" = "yes" ] && [ "$MULTI_HAS_DOCKER_RESOURCES" = "no" ]; then
+    set_stack_type "single-node"
+    echo "Detected Wazuh Docker stack type from Docker resources: $STACK_TYPE"
+    echo ""
+    return 0
+  fi
+
+  if [ "$MULTI_HAS_DOCKER_RESOURCES" = "yes" ] && [ "$SINGLE_HAS_DOCKER_RESOURCES" = "no" ]; then
+    set_stack_type "multi-node"
+    echo "Detected Wazuh Docker stack type from Docker resources: $STACK_TYPE"
+    echo ""
+    return 0
+  fi
+
+  if [ -f "$SINGLE_STACK_DIR/docker-compose.yml" ]; then
+    SINGLE_HAS_COMPOSE_FILE="yes"
+  fi
+
+  if [ -f "$MULTI_STACK_DIR/docker-compose.yml" ]; then
+    MULTI_HAS_COMPOSE_FILE="yes"
+  fi
+
+  if [ "$SINGLE_HAS_COMPOSE_FILE" = "yes" ] && [ "$MULTI_HAS_COMPOSE_FILE" = "no" ]; then
+    set_stack_type "single-node"
+    echo "Detected Wazuh Docker stack type from installed files: $STACK_TYPE"
+    echo ""
+    return 0
+  fi
+
+  if [ "$MULTI_HAS_COMPOSE_FILE" = "yes" ] && [ "$SINGLE_HAS_COMPOSE_FILE" = "no" ]; then
+    set_stack_type "multi-node"
+    echo "Detected Wazuh Docker stack type from installed files: $STACK_TYPE"
+    echo ""
+    return 0
+  fi
+
+  return 1
+}
+
 select_stack_type() {
   local SELECTED_STACK
 
   if [ -n "$STACK_TYPE" ]; then
     set_stack_type "$STACK_TYPE"
+    return 0
+  fi
+
+  if auto_detect_stack_type; then
     return 0
   fi
 
@@ -297,6 +393,9 @@ select_restore_scope() {
 
 select_restore_dir() {
   local SELECTED_DIR
+  local DEFAULT_RESTORE_DIR=""
+  local BACKUP_COUNT=0
+  local BACKUP_DIR_CANDIDATE
 
   if [ -n "$RESTORE_DIR" ]; then
     if [ ! -d "$RESTORE_DIR" ]; then
@@ -308,14 +407,25 @@ select_restore_dir() {
 
   echo "Available backups:"
   if [ -d "$BACKUP_ROOT" ]; then
-    find "$BACKUP_ROOT" -maxdepth 1 -mindepth 1 -type d -name 'backup-*' -printf '  %p\n' | sort
+    while IFS= read -r BACKUP_DIR_CANDIDATE; do
+      BACKUP_COUNT=$((BACKUP_COUNT + 1))
+      DEFAULT_RESTORE_DIR="$BACKUP_DIR_CANDIDATE"
+      echo "  $BACKUP_DIR_CANDIDATE"
+    done < <(find "$BACKUP_ROOT" -maxdepth 1 -mindepth 1 -type d -name 'backup-*' -printf '%p\n' | sort)
   else
     echo "  No backup root found: $BACKUP_ROOT"
   fi
   echo ""
 
   while true; do
-    read -r -p "Backup directory to restore: " SELECTED_DIR
+    if [ "$BACKUP_COUNT" -eq 1 ]; then
+      read -r -p "Backup directory to restore [$DEFAULT_RESTORE_DIR]: " SELECTED_DIR
+      if [ -z "$SELECTED_DIR" ]; then
+        SELECTED_DIR="$DEFAULT_RESTORE_DIR"
+      fi
+    else
+      read -r -p "Backup directory to restore: " SELECTED_DIR
+    fi
 
     if [ -d "$SELECTED_DIR" ]; then
       RESTORE_DIR="$SELECTED_DIR"
@@ -418,9 +528,12 @@ print_client_data_warning() {
   echo "  alerts, indexed events, manager state, Filebeat state, dashboard data,"
   echo "  queues, and runtime logs."
   echo ""
-  echo "For the most consistent data backup, stop the Wazuh containers before"
-  echo "running this script. Backing up live containers can capture changing data"
-  echo "mid-write."
+  echo "The script will stop running Wazuh containers before archiving Docker"
+  echo "volumes, then restart the services it stopped after the backup."
+  echo ""
+  echo "Make sure the backup destination has enough free disk space. The default"
+  echo "BACKUP_ROOT is on this VM under /opt/easy-wazuh-backups, so a full client"
+  echo "data backup can fill the same disk used by Wazuh and Docker."
   echo "=================================================="
   echo ""
 }
@@ -435,13 +548,96 @@ print_client_data_restore_warning() {
   echo "This can replace current alerts, indexed events, manager state, Filebeat"
   echo "state, dashboard data, queues, and runtime logs."
   echo ""
-  echo "Stop Wazuh containers before restoring client/runtime data."
+  echo "The script will stop running Wazuh containers before restoring Docker"
+  echo "volumes, then restart the services it stopped after the restore."
   echo "=================================================="
   echo ""
 }
 
 docker_compose_declared_volumes() {
   docker compose -f "$STACK_DIR/docker-compose.yml" config --volumes
+}
+
+docker_compose_declared_services() {
+  docker compose -f "$STACK_DIR/docker-compose.yml" config --services
+}
+
+docker_compose_running_services() {
+  local SERVICE
+  local CONTAINER_ID
+  local RUNNING
+
+  while IFS= read -r SERVICE; do
+    [ -n "$SERVICE" ] || continue
+
+    CONTAINER_ID="$(docker compose -f "$STACK_DIR/docker-compose.yml" ps -q "$SERVICE" 2>/dev/null || true)"
+    [ -n "$CONTAINER_ID" ] || continue
+
+    RUNNING="$(docker inspect --format '{{.State.Running}}' "$CONTAINER_ID" 2>/dev/null || echo "false")"
+    if [ "$RUNNING" = "true" ]; then
+      echo "$SERVICE"
+    fi
+  done < <(docker_compose_declared_services)
+}
+
+restart_stopped_wazuh_containers() {
+  local OPERATION_LABEL="$1"
+  local SERVICES_TO_START
+
+  if [ -z "$STOPPED_RUNNING_SERVICES" ]; then
+    return 0
+  fi
+
+  SERVICES_TO_START="$STOPPED_RUNNING_SERVICES"
+  STOPPED_RUNNING_SERVICES=""
+  trap - EXIT
+
+  echo "Restarting Wazuh containers that were stopped for $OPERATION_LABEL..."
+  docker compose -f "$STACK_DIR/docker-compose.yml" start $SERVICES_TO_START
+  echo ""
+}
+
+restart_stopped_wazuh_containers_after_backup() {
+  restart_stopped_wazuh_containers "backup"
+}
+
+restart_stopped_wazuh_containers_after_restore() {
+  restart_stopped_wazuh_containers "restore"
+}
+
+stop_wazuh_containers() {
+  local OPERATION_LABEL="$1"
+
+  STOPPED_RUNNING_SERVICES="$(docker_compose_running_services)"
+
+  if [ -z "$STOPPED_RUNNING_SERVICES" ]; then
+    echo "No running Wazuh containers found for this Compose stack."
+    echo ""
+    return 0
+  fi
+
+  echo "Stopping Wazuh containers before client/runtime data $OPERATION_LABEL..."
+  while IFS= read -r SERVICE; do
+    [ -n "$SERVICE" ] || continue
+    echo "  $SERVICE"
+  done <<< "$STOPPED_RUNNING_SERVICES"
+
+  if [ "$OPERATION_LABEL" = "backup" ]; then
+    trap restart_stopped_wazuh_containers_after_backup EXIT
+  else
+    trap restart_stopped_wazuh_containers_after_restore EXIT
+  fi
+
+  docker compose -f "$STACK_DIR/docker-compose.yml" stop $STOPPED_RUNNING_SERVICES
+  echo ""
+}
+
+stop_wazuh_containers_before_backup() {
+  stop_wazuh_containers "backup"
+}
+
+stop_wazuh_containers_before_restore() {
+  stop_wazuh_containers "restore"
 }
 
 docker_volume_name_for_compose_volume() {
@@ -520,12 +716,16 @@ backup_wazuh_docker_volumes() {
     return 0
   fi
 
+  stop_wazuh_containers_before_backup
+
   echo "Saving Wazuh Docker volumes for Compose project: $COMPOSE_PROJECT_NAME"
   while IFS= read -r VOLUME; do
     [ -n "$VOLUME" ] || continue
     backup_docker_volume "$VOLUME"
   done <<< "$VOLUMES"
   echo ""
+
+  restart_stopped_wazuh_containers_after_backup
 }
 
 restore_docker_volume() {
@@ -537,6 +737,7 @@ restore_docker_volume() {
   SOURCE="$RESTORE_DIR/docker-volumes/$LOGICAL_VOLUME.tar.gz"
 
   if [ ! -f "$SOURCE" ]; then
+    MISSING_VOLUME_ARCHIVE_COUNT=$((MISSING_VOLUME_ARCHIVE_COUNT + 1))
     echo "Skipped, volume archive not found: $SOURCE"
     return 0
   fi
@@ -559,7 +760,47 @@ restore_docker_volume() {
 
   find "$MOUNTPOINT" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   tar -C "$MOUNTPOINT" -xzf "$SOURCE"
+  RESTORED_VOLUME_COUNT=$((RESTORED_VOLUME_COUNT + 1))
   echo "Restored Docker volume: $LOGICAL_VOLUME ($VOLUME_NAME)"
+}
+
+assert_restore_has_all_volume_archives() {
+  local VOLUMES="$1"
+  local VOLUME
+  local SOURCE
+  local MISSING_ARCHIVES=""
+  local MISSING_COUNT=0
+
+  while IFS= read -r VOLUME; do
+    [ -n "$VOLUME" ] || continue
+
+    SOURCE="$RESTORE_DIR/docker-volumes/$VOLUME.tar.gz"
+    if [ ! -f "$SOURCE" ]; then
+      MISSING_COUNT=$((MISSING_COUNT + 1))
+      MISSING_ARCHIVES="$MISSING_ARCHIVES
+  $SOURCE"
+    fi
+  done <<< "$VOLUMES"
+
+  if [ "$MISSING_COUNT" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "Error: selected backup is missing $MISSING_COUNT Docker volume archive(s):"
+  echo "$MISSING_ARCHIVES"
+  echo ""
+  echo "Restore stopped to avoid a partial Wazuh runtime restore."
+  echo "Use a complete backup, or set ALLOW_PARTIAL_VOLUME_RESTORE=yes if you"
+  echo "intentionally want to restore only the archives that are present."
+
+  if [ "$ALLOW_PARTIAL_VOLUME_RESTORE" = "yes" ]; then
+    echo ""
+    echo "ALLOW_PARTIAL_VOLUME_RESTORE=yes is set, continuing with partial restore."
+    echo ""
+    return 0
+  fi
+
+  exit 1
 }
 
 restore_wazuh_docker_volumes() {
@@ -602,7 +843,11 @@ restore_wazuh_docker_volumes() {
     return 0
   fi
 
+  assert_restore_has_all_volume_archives "$VOLUMES"
+
   confirm_or_exit "Overwrite matching Wazuh Docker volumes from backup"
+
+  stop_wazuh_containers_before_restore
 
   echo "Restoring Wazuh Docker volumes for Compose project: $COMPOSE_PROJECT_NAME"
   while IFS= read -r VOLUME; do
@@ -610,6 +855,16 @@ restore_wazuh_docker_volumes() {
     restore_docker_volume "$VOLUME"
   done <<< "$VOLUMES"
   echo ""
+
+  echo "Docker volume restore summary:"
+  echo "  Restored archives: $RESTORED_VOLUME_COUNT"
+  echo "  Missing archives:  $MISSING_VOLUME_ARCHIVE_COUNT"
+  if [ "$MISSING_VOLUME_ARCHIVE_COUNT" -gt 0 ]; then
+    echo "Warning: restore is partial because some declared Docker volumes were not present in the backup."
+  fi
+  echo ""
+
+  restart_stopped_wazuh_containers_after_restore
 }
 
 run_backup() {
@@ -623,6 +878,8 @@ run_backup() {
 
   echo "Backup directory:"
   echo "  $BACKUP_DIR"
+  echo "Backup filesystem free space:"
+  print_disk_space "$BACKUP_ROOT"
   echo ""
   echo "Selected stack type: $STACK_TYPE"
   echo "Stack directory:     $STACK_DIR"
