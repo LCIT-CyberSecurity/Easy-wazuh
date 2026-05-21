@@ -48,7 +48,7 @@ In production, Wazuh components should be separated so each layer can absorb the
 - Wazuh indexer nodes for indexing, search, storage, and retention.
 - Wazuh dashboard nodes for user access and visualization.
 
-This one Docker host/VM setup does not provide high availability, workload distribution across machines, or the resilience expected from a production Wazuh deployment. Separating components makes it possible to observe, tune, back up, and later redesign each layer independently, but it does not create a Wazuh cluster by itself.
+This one Docker host/VM setup does not provide high availability, workload distribution across machines, or the resilience expected from a production Wazuh deployment. Separating components makes it possible to observe, tune, and later redesign each layer independently, but it does not create a Wazuh cluster by itself.
 
 ## Scaling and migration
 
@@ -62,7 +62,7 @@ wazuh/wazuh-dashboard  -> dashboard container
 
 This is useful for a future migration because each role already has its own container, configuration, logs, and volumes. However, scaling is still a separate architecture task.
 
-Moving the whole stack to another Docker VM is usually a controlled backup/restore operation: preserve the Docker volumes, mounted configuration, certificates, and public FQDN behavior.
+Moving the whole stack to another Docker VM is a controlled migration task: preserve the Docker volumes, mounted configuration, certificates, and public FQDN behavior.
 
 Splitting the roles across several VMs is not a simple container move. It requires new DNS/FQDN planning, certificates, firewall rules, Wazuh manager/indexer/dashboard configuration changes, and data migration planning.
 
@@ -275,7 +275,7 @@ sudo WAZUH_VERSION=v4.14.5 ./Wazuh-installer.sh
 
 ## Updating Docker images without losing data
 
-**Before any update, make a complete backup or snapshot of the Debian machine.** This is strongly recommended so you can restore the full Wazuh installation if the update fails.
+**Before any update, make a complete snapshot of the Debian machine.** This is strongly recommended so you can restore the full Wazuh installation if the update fails.
 
 Wazuh data, configuration, certificates, indexed events, and dashboard data are stored in Docker volumes and mounted files under `/opt/wazuh/wazuh-docker/single-node`. A normal container update recreates containers but keeps these persistent resources.
 
@@ -380,81 +380,6 @@ Network and security requirements:
 - do not store SSH passwords or enrollment secrets in plain text inventory files
 - use Ansible Vault for secrets if enrollment passwords or privileged credentials are needed
 
-## Backup and restore
-
-Use `Backup_Wazuh-Config.sh` to back up or restore Wazuh configuration, with an optional client/runtime data backup.
-
-Run it interactively:
-
-```bash
-sudo ./Backup_Wazuh-Config.sh
-```
-
-The script first asks whether to back up or restore:
-
-```text
-1) Backup Wazuh
-2) Restore Wazuh
-```
-
-It then asks which Wazuh Docker stack type to use:
-
-```text
-1) single-node
-2) multi-node
-```
-
-Backup scope:
-
-```text
-1) Wazuh configuration only - no client/runtime data
-2) Wazuh configuration and client/runtime data from Docker volumes
-```
-
-Restore scope:
-
-```text
-1) Restore Wazuh configuration only - no client/runtime data
-2) Restore Wazuh configuration and client/runtime data from Docker volumes
-```
-
-Configuration-only backup saves the Docker Compose file, Wazuh Docker `config/` directory, local agent configuration if present, and a metadata/config archive. It does not back up client alerts, indexed events, dashboard state, queues, or other Docker volume data.
-
-Client/runtime data backup archives matching Wazuh Docker volumes into:
-
-```text
-/opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS/docker-volumes/
-```
-
-Backup directories are created with root-only permissions because they can contain Wazuh certificates, private keys, local agent configuration, alerts, indexed events, and other client data.
-
-During restore, Docker volume archives are checked before extraction. Archives containing absolute paths or `..` path traversal entries are rejected. Restore only backups from trusted Easy-wazuh runs, especially when restoring client/runtime data.
-
-For consistent client/runtime data backups or restores, stop the Wazuh containers first:
-
-```bash
-sudo docker compose -f /opt/wazuh/wazuh-docker/single-node/docker-compose.yml down
-```
-
-or for multi-node:
-
-```bash
-sudo docker compose -f /opt/wazuh/wazuh-docker/multi-node/docker-compose.yml down
-```
-
-Do not use `down -v` unless you intentionally want to delete Docker volume data.
-
-Non-interactive examples:
-
-```bash
-sudo ACTION=backup STACK_TYPE=single-node BACKUP_CLIENT_DATA=no ./Backup_Wazuh-Config.sh
-sudo ACTION=backup STACK_TYPE=multi-node BACKUP_CLIENT_DATA=yes ./Backup_Wazuh-Config.sh
-sudo ACTION=restore RESTORE_DIR=/opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS RESTORE_CLIENT_DATA=no ./Backup_Wazuh-Config.sh
-sudo ACTION=restore RESTORE_DIR=/opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS RESTORE_CLIENT_DATA=yes ./Backup_Wazuh-Config.sh
-```
-
-Restoring client/runtime data overwrites matching Docker volumes from the selected backup. The script displays warnings and asks for confirmation before restoring.
-
 ## Ports
 
 The default Wazuh single-node Docker deployment exposes these ports:
@@ -495,10 +420,11 @@ Before enabling syslog ingestion, confirm the client-approved source IP ranges. 
 
 ### Wazuh manager configuration
 
-Back up the current Wazuh configuration first:
+Save a copy of the current Wazuh manager configuration first:
 
 ```bash
-sudo ./Backup_Wazuh-Config.sh
+sudo cp -a /opt/wazuh/wazuh-docker/single-node/config/wazuh_cluster/wazuh_manager.conf \
+  /opt/wazuh/wazuh-docker/single-node/config/wazuh_cluster/wazuh_manager.conf.bak.$(date +%Y%m%d%H%M%S)
 ```
 
 For single-node, edit:
@@ -682,7 +608,7 @@ Port intent:
 1515/tcp   Wazuh agent enrollment. Allow only endpoint networks during enrollment.
 514/udp    Syslog ingestion. Allow only trusted syslog senders.
 55000/tcp  Wazuh manager API. Avoid public exposure; allow only approved API clients or automation sources.
-9200/tcp   Wazuh indexer API. Avoid public exposure; allow only admin/backup/maintenance sources if needed.
+9200/tcp   Wazuh indexer API. Avoid public exposure; allow only admin or maintenance sources if needed.
 ```
 
 If the indexer API is not required from outside the Docker host, do not add the `9200/tcp` allow rule. If the manager API is not required from outside the Docker host, do not add the `55000/tcp` allow rule.
