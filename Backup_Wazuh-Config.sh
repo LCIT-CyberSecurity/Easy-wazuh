@@ -12,10 +12,9 @@ STACK_DIR="${STACK_DIR:-}"
 LOCAL_AGENT_CONF="${LOCAL_AGENT_CONF:-/var/ossec/etc/ossec.conf}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
 ACTION="${ACTION:-}"
-BACKUP_CLIENT_DATA="${BACKUP_CLIENT_DATA:-}"
 RESTORE_DIR="${RESTORE_DIR:-}"
-RESTORE_CLIENT_DATA="${RESTORE_CLIENT_DATA:-}"
 ALLOW_PARTIAL_VOLUME_RESTORE="${ALLOW_PARTIAL_VOLUME_RESTORE:-no}"
+BACKUP_RESTART_STACK="${BACKUP_RESTART_STACK:-yes}"
 STOPPED_RUNNING_SERVICES=""
 RESTORED_VOLUME_COUNT=0
 MISSING_VOLUME_ARCHIVE_COUNT=0
@@ -30,6 +29,16 @@ if [ "$EUID" -ne 0 ]; then
   echo "Example: sudo ./Backup_Wazuh-Config.sh"
   exit 1
 fi
+
+case "$BACKUP_RESTART_STACK" in
+  yes|no)
+    ;;
+  *)
+    echo "Error: invalid BACKUP_RESTART_STACK value: $BACKUP_RESTART_STACK"
+    echo "Expected value: yes or no"
+    exit 1
+    ;;
+esac
 
 copy_if_exists() {
   local SOURCE="$1"
@@ -299,98 +308,6 @@ select_action() {
   echo ""
 }
 
-select_backup_scope() {
-  local BACKUP_SCOPE
-
-  if [ -n "$BACKUP_CLIENT_DATA" ]; then
-    case "$BACKUP_CLIENT_DATA" in
-      yes|no)
-        return 0
-        ;;
-      *)
-        echo "Error: invalid BACKUP_CLIENT_DATA value: $BACKUP_CLIENT_DATA"
-        echo "Expected value: yes or no"
-        exit 1
-        ;;
-    esac
-  fi
-
-  echo "Backup scope:"
-  echo "  1) Wazuh configuration only - no client/runtime data"
-  echo "  2) Wazuh configuration and client/runtime data from Docker volumes"
-  echo ""
-  echo "########################################################################"
-  echo "# WARNING: if you choose option 1, client data will NOT be backed up. #"
-  echo "########################################################################"
-  echo ""
-
-  while true; do
-    read -r -p "Choose backup scope [1/2]: " BACKUP_SCOPE
-
-    case "$BACKUP_SCOPE" in
-      1|"")
-        BACKUP_CLIENT_DATA="no"
-        break
-        ;;
-      2)
-        BACKUP_CLIENT_DATA="yes"
-        break
-        ;;
-      *)
-        echo "Please enter 1 or 2."
-        ;;
-    esac
-  done
-
-  echo ""
-}
-
-select_restore_scope() {
-  local RESTORE_SCOPE
-
-  if [ -n "$RESTORE_CLIENT_DATA" ]; then
-    case "$RESTORE_CLIENT_DATA" in
-      yes|no)
-        return 0
-        ;;
-      *)
-        echo "Error: invalid RESTORE_CLIENT_DATA value: $RESTORE_CLIENT_DATA"
-        echo "Expected value: yes or no"
-        exit 1
-        ;;
-    esac
-  fi
-
-  echo "Restore scope:"
-  echo "  1) Restore Wazuh configuration only - no client/runtime data"
-  echo "  2) Restore Wazuh configuration and client/runtime data from Docker volumes"
-  echo ""
-  echo "##########################################################################"
-  echo "# WARNING: option 2 overwrites current Docker volume client/runtime data. #"
-  echo "##########################################################################"
-  echo ""
-
-  while true; do
-    read -r -p "Choose restore scope [1/2]: " RESTORE_SCOPE
-
-    case "$RESTORE_SCOPE" in
-      1|"")
-        RESTORE_CLIENT_DATA="no"
-        break
-        ;;
-      2)
-        RESTORE_CLIENT_DATA="yes"
-        break
-        ;;
-      *)
-        echo "Please enter 1 or 2."
-        ;;
-    esac
-  done
-
-  echo ""
-}
-
 select_restore_dir() {
   local SELECTED_DIR
   local DEFAULT_RESTORE_DIR=""
@@ -455,20 +372,35 @@ restore_stack_backup_dir() {
   echo "$CANDIDATE"
 }
 
-infer_stack_type_from_restore_dir() {
+backup_metadata_value() {
+  local KEY="$1"
   local METADATA_FILE="$RESTORE_DIR/easy-wazuh-backup-metadata.env"
+
+  if [ ! -f "$METADATA_FILE" ]; then
+    return 0
+  fi
+
+  sed -n "s/^$KEY=//p" "$METADATA_FILE" | sed -n '1p'
+}
+
+infer_stack_type_from_restore_dir() {
+  local BACKUP_COMPOSE_PROJECT_NAME
+  local BACKUP_STACK_TYPE
+
+  BACKUP_COMPOSE_PROJECT_NAME="$(backup_metadata_value "COMPOSE_PROJECT_NAME")"
+  if [ -n "$BACKUP_COMPOSE_PROJECT_NAME" ] && [ -z "$COMPOSE_PROJECT_NAME" ]; then
+    COMPOSE_PROJECT_NAME="$BACKUP_COMPOSE_PROJECT_NAME"
+  fi
 
   if [ -n "$STACK_TYPE" ]; then
     set_stack_type "$STACK_TYPE"
     return 0
   fi
 
-  if [ -f "$METADATA_FILE" ]; then
-    STACK_TYPE="$(sed -n 's/^STACK_TYPE=//p' "$METADATA_FILE" | sed -n '1p')"
-    if [ -n "$STACK_TYPE" ]; then
-      set_stack_type "$STACK_TYPE"
-      return 0
-    fi
+  BACKUP_STACK_TYPE="$(backup_metadata_value "STACK_TYPE")"
+  if [ -n "$BACKUP_STACK_TYPE" ]; then
+    set_stack_type "$BACKUP_STACK_TYPE"
+    return 0
   fi
 
   if [ -d "$RESTORE_DIR/wazuh-docker-single-node" ] && [ ! -d "$RESTORE_DIR/wazuh-docker-multi-node" ]; then
@@ -484,72 +416,39 @@ infer_stack_type_from_restore_dir() {
   select_stack_type
 }
 
-print_config_only_warning() {
+print_full_backup_warning() {
   echo "=================================================="
-  echo " BIG WARNING - CONFIGURATION BACKUP ONLY"
+  echo " FULL WAZUH BACKUP"
   echo "=================================================="
-  echo "You selected configuration-only backup."
-  echo "Client data will NOT be backed up."
+  echo "This backup includes Wazuh configuration and Docker volumes."
+  echo "Docker volumes can contain alerts, indexed events, manager state,"
+  echo "Filebeat state, dashboard data, queues, and runtime logs."
   echo ""
-  echo "This script intentionally does NOT back up client/runtime data."
-  echo ""
-  echo "It saves Wazuh configuration files and local metadata only."
-  echo "It does NOT save Docker volumes such as:"
-  echo "  wazuh-indexer-data, wazuh_logs, wazuh_queue, wazuh_etc,"
-  echo "  filebeat_etc, filebeat_var, dashboard volumes, or alert indices."
-  echo ""
-  echo "Client alerts, indexed events, runtime state, and other data stored in"
-  echo "Docker volumes are excluded on purpose."
-  echo ""
-  echo "Do NOT run 'docker compose down -v' unless you intentionally want to delete"
-  echo "those Docker volumes."
-  echo "=================================================="
-  echo ""
-}
-
-print_config_only_restore_warning() {
-  echo "=================================================="
-  echo " BIG WARNING - CONFIGURATION RESTORE ONLY"
-  echo "=================================================="
-  echo "You selected configuration-only restore."
-  echo "Client data will NOT be restored."
-  echo ""
-  echo "Only Wazuh Docker configuration files and the local agent configuration,"
-  echo "if present in the backup, will be copied back."
-  echo "=================================================="
-  echo ""
-}
-
-print_client_data_warning() {
-  echo "=================================================="
-  echo " BIG WARNING - CLIENT/RUNTIME DATA BACKUP ENABLED"
-  echo "=================================================="
-  echo "This backup will include Wazuh Docker volumes that can contain client data:"
-  echo "  alerts, indexed events, manager state, Filebeat state, dashboard data,"
-  echo "  queues, and runtime logs."
-  echo ""
-  echo "The script will stop running Wazuh containers before archiving Docker"
-  echo "volumes, then restart the services it stopped after the backup."
+  echo "The script will stop the Wazuh Compose stack with 'docker compose down'"
+  echo "before copying configuration and archiving Docker volumes. It does not"
+  echo "use '-v', so Docker volumes are preserved."
+  echo "After a successful backup, it starts the Wazuh Compose stack automatically."
   echo ""
   echo "Make sure the backup destination has enough free disk space. The default"
-  echo "BACKUP_ROOT is on this VM under /opt/easy-wazuh-backups, so a full client"
-  echo "data backup can fill the same disk used by Wazuh and Docker."
+  echo "BACKUP_ROOT is on this VM under /opt/easy-wazuh-backups, so a full backup"
+  echo "can fill the same disk used by Wazuh and Docker."
   echo "=================================================="
   echo ""
 }
 
-print_client_data_restore_warning() {
+print_full_restore_warning() {
   echo "=================================================="
-  echo " BIG WARNING - CLIENT/RUNTIME DATA RESTORE ENABLED"
+  echo " FULL WAZUH RESTORE"
   echo "=================================================="
-  echo "This restore will overwrite Wazuh Docker volumes when matching volume"
-  echo "archives exist in the selected backup."
+  echo "This restore overwrites Wazuh configuration and matching Docker volumes"
+  echo "from the selected backup."
   echo ""
-  echo "This can replace current alerts, indexed events, manager state, Filebeat"
+  echo "It can replace current alerts, indexed events, manager state, Filebeat"
   echo "state, dashboard data, queues, and runtime logs."
   echo ""
-  echo "The script will stop running Wazuh containers before restoring Docker"
-  echo "volumes, then restart the services it stopped after the restore."
+  echo "The script will stop the Wazuh Compose stack with 'docker compose down'"
+  echo "before restoring configuration and Docker volumes. It does not use '-v',"
+  echo "so existing Docker volumes are not deleted before they are overwritten."
   echo "=================================================="
   echo ""
 }
@@ -582,18 +481,16 @@ docker_compose_running_services() {
 
 restart_stopped_wazuh_containers() {
   local OPERATION_LABEL="$1"
-  local SERVICES_TO_START
 
   if [ -z "$STOPPED_RUNNING_SERVICES" ]; then
     return 0
   fi
 
-  SERVICES_TO_START="$STOPPED_RUNNING_SERVICES"
   STOPPED_RUNNING_SERVICES=""
   trap - EXIT
 
-  echo "Restarting Wazuh containers that were stopped for $OPERATION_LABEL..."
-  docker compose -f "$STACK_DIR/docker-compose.yml" start $SERVICES_TO_START
+  echo "Starting Wazuh Compose stack after $OPERATION_LABEL..."
+  docker compose -f "$STACK_DIR/docker-compose.yml" up -d
   echo ""
 }
 
@@ -601,12 +498,54 @@ restart_stopped_wazuh_containers_after_backup() {
   restart_stopped_wazuh_containers "backup"
 }
 
+start_wazuh_stack_after_successful_backup() {
+  trap - EXIT
+  STOPPED_RUNNING_SERVICES=""
+
+  if [ "$BACKUP_RESTART_STACK" != "yes" ]; then
+    echo "BACKUP_RESTART_STACK=no is set, leaving Wazuh Compose stack stopped."
+    echo ""
+    return 0
+  fi
+
+  echo "Starting Wazuh Compose stack after successful backup..."
+  docker compose -f "$STACK_DIR/docker-compose.yml" up -d
+  echo ""
+}
+
 restart_stopped_wazuh_containers_after_restore() {
   restart_stopped_wazuh_containers "restore"
 }
 
+restart_stopped_wazuh_containers_after_restore_if_successful() {
+  local EXIT_STATUS=$?
+
+  if [ "$EXIT_STATUS" -eq 0 ]; then
+    restart_stopped_wazuh_containers_after_restore
+    exit 0
+  fi
+
+  if [ -n "$STOPPED_RUNNING_SERVICES" ]; then
+    echo ""
+    echo "Restore failed after the Wazuh stack was stopped."
+    echo "The stack is left stopped to avoid starting a partially restored state."
+    echo "After fixing the issue, start it manually with:"
+    echo "  docker compose -f $STACK_DIR/docker-compose.yml up -d"
+  fi
+
+  exit "$EXIT_STATUS"
+}
+
 stop_wazuh_containers() {
   local OPERATION_LABEL="$1"
+
+  if [ ! -f "$STACK_DIR/docker-compose.yml" ]; then
+    echo "No existing Compose file found before $OPERATION_LABEL:"
+    echo "  $STACK_DIR/docker-compose.yml"
+    echo "Skipping stack stop."
+    echo ""
+    return 0
+  fi
 
   STOPPED_RUNNING_SERVICES="$(docker_compose_running_services)"
 
@@ -616,7 +555,7 @@ stop_wazuh_containers() {
     return 0
   fi
 
-  echo "Stopping Wazuh containers before client/runtime data $OPERATION_LABEL..."
+  echo "Stopping Wazuh Compose stack before $OPERATION_LABEL..."
   while IFS= read -r SERVICE; do
     [ -n "$SERVICE" ] || continue
     echo "  $SERVICE"
@@ -625,10 +564,10 @@ stop_wazuh_containers() {
   if [ "$OPERATION_LABEL" = "backup" ]; then
     trap restart_stopped_wazuh_containers_after_backup EXIT
   else
-    trap restart_stopped_wazuh_containers_after_restore EXIT
+    trap restart_stopped_wazuh_containers_after_restore_if_successful EXIT
   fi
 
-  docker compose -f "$STACK_DIR/docker-compose.yml" stop $STOPPED_RUNNING_SERVICES
+  docker compose -f "$STACK_DIR/docker-compose.yml" down
   echo ""
 }
 
@@ -686,19 +625,13 @@ backup_wazuh_docker_volumes() {
   local VOLUME
   local VOLUMES
 
-  if [ "$BACKUP_CLIENT_DATA" != "yes" ]; then
-    return 0
-  fi
-
-  print_client_data_warning
-
   if ! docker_daemon_is_available; then
-    echo "Error: Docker daemon is not reachable, client/runtime data cannot be backed up."
+    echo "Error: Docker daemon is not reachable, Docker volumes cannot be backed up."
     exit 1
   fi
 
   if [ ! -f "$STACK_DIR/docker-compose.yml" ]; then
-    echo "Error: Compose file not found, client/runtime data cannot be backed up."
+    echo "Error: Compose file not found, Docker volumes cannot be backed up."
     echo "Missing file: $STACK_DIR/docker-compose.yml"
     exit 1
   fi
@@ -716,16 +649,12 @@ backup_wazuh_docker_volumes() {
     return 0
   fi
 
-  stop_wazuh_containers_before_backup
-
   echo "Saving Wazuh Docker volumes for Compose project: $COMPOSE_PROJECT_NAME"
   while IFS= read -r VOLUME; do
     [ -n "$VOLUME" ] || continue
     backup_docker_volume "$VOLUME"
   done <<< "$VOLUMES"
   echo ""
-
-  restart_stopped_wazuh_containers_after_backup
 }
 
 restore_docker_volume() {
@@ -807,14 +736,8 @@ restore_wazuh_docker_volumes() {
   local VOLUME
   local VOLUMES
 
-  if [ "$RESTORE_CLIENT_DATA" != "yes" ]; then
-    return 0
-  fi
-
-  print_client_data_restore_warning
-
   if ! docker_daemon_is_available; then
-    echo "Error: Docker daemon is not reachable, client/runtime data cannot be restored."
+    echo "Error: Docker daemon is not reachable, Docker volumes cannot be restored."
     exit 1
   fi
 
@@ -845,10 +768,6 @@ restore_wazuh_docker_volumes() {
 
   assert_restore_has_all_volume_archives "$VOLUMES"
 
-  confirm_or_exit "Overwrite matching Wazuh Docker volumes from backup"
-
-  stop_wazuh_containers_before_restore
-
   echo "Restoring Wazuh Docker volumes for Compose project: $COMPOSE_PROJECT_NAME"
   while IFS= read -r VOLUME; do
     [ -n "$VOLUME" ] || continue
@@ -863,8 +782,6 @@ restore_wazuh_docker_volumes() {
     echo "Warning: restore is partial because some declared Docker volumes were not present in the backup."
   fi
   echo ""
-
-  restart_stopped_wazuh_containers_after_restore
 }
 
 run_backup() {
@@ -893,14 +810,9 @@ run_backup() {
     echo "CREATED_AT=$TIMESTAMP"
   } > "$BACKUP_DIR/easy-wazuh-backup-metadata.env"
 
-  select_backup_scope
-
-  if [ "$BACKUP_CLIENT_DATA" = "yes" ]; then
-    echo "Selected backup scope: Wazuh configuration and client/runtime data"
-  else
-    echo "Selected backup scope: Wazuh configuration only"
-    print_config_only_warning
-  fi
+  print_full_backup_warning
+  confirm_or_exit "Continue with full backup"
+  stop_wazuh_containers_before_backup
 
   echo "Saving Wazuh Docker configuration..."
   copy_if_exists "$STACK_DIR/docker-compose.yml" "$BACKUP_STACK_DIR/docker-compose.yml"
@@ -925,6 +837,8 @@ run_backup() {
     echo "Skipped archive, not found: $WAZUH_DIR"
   fi
 
+  start_wazuh_stack_after_successful_backup
+
   echo ""
   echo "Backup content:"
   find "$BACKUP_DIR" -maxdepth 4 -type f -printf '  %p\n' | sort
@@ -943,7 +857,6 @@ run_restore() {
   select_restore_dir
   infer_stack_type_from_restore_dir
   RESTORE_STACK_DIR="$(restore_stack_backup_dir)"
-  select_restore_scope
 
   echo "Restore directory:"
   echo "  $RESTORE_DIR"
@@ -953,14 +866,9 @@ run_restore() {
   echo "Compose project:     $COMPOSE_PROJECT_NAME"
   echo ""
 
-  if [ "$RESTORE_CLIENT_DATA" = "yes" ]; then
-    echo "Selected restore scope: Wazuh configuration and client/runtime data"
-  else
-    echo "Selected restore scope: Wazuh configuration only"
-    print_config_only_restore_warning
-  fi
-
-  confirm_or_exit "Continue with restore"
+  print_full_restore_warning
+  confirm_or_exit "Continue with full restore"
+  stop_wazuh_containers_before_restore
 
   echo "Restoring Wazuh Docker configuration..."
   restore_if_exists "$RESTORE_STACK_DIR/docker-compose.yml" "$STACK_DIR/docker-compose.yml"
@@ -972,6 +880,8 @@ run_restore() {
   echo ""
 
   restore_wazuh_docker_volumes
+
+  restart_stopped_wazuh_containers_after_restore
 
   echo ""
   echo "=================================================="

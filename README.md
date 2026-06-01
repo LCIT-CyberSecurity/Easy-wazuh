@@ -187,6 +187,10 @@ The script then asks which Wazuh Docker deployment mode to use:
 
 Pressing `Enter` selects `multi-node`.
 
+The installer also asks whether to enable realtime File Integrity Monitoring
+on a local Wazuh agent installed on the Docker host. Pressing `Enter` enables
+it by default.
+
 The script asks for confirmation before continuing with the selected installation mode and deployment mode. It also asks for a final confirmation before starting the Wazuh containers. The script explicitly reminds the user that this is a one Docker host/VM PoC deployment, not a production deployment.
 
 In fresh Debian mode, the script installs Docker, configures the Wazuh indexer kernel requirement, clones the official Wazuh Docker repository, generates self-signed certificates, starts the selected Wazuh Docker stack, and prints the access information at the end.
@@ -382,7 +386,7 @@ Network and security requirements:
 
 ## Backup and restore
 
-Use `Backup_Wazuh-Config.sh` to back up or restore Wazuh configuration, with an optional client/runtime data backup.
+Use `Backup_Wazuh-Config.sh` to back up or restore the full Wazuh Docker stack state created by the installer: Compose configuration, Wazuh Docker `config/`, local agent configuration if present, and Docker volumes.
 
 Run it interactively:
 
@@ -404,23 +408,25 @@ It then detects the Wazuh Docker stack type automatically when there is no ambig
 2) multi-node
 ```
 
-Backup scope:
+The backup is intentionally complete. It does not offer a configuration-only mode, because restoring configuration without the matching runtime/index/dashboard volumes can leave Wazuh in an inconsistent state.
+
+This is compatible with both installer entry modes:
 
 ```text
-1) Wazuh configuration only - no client/runtime data
-2) Wazuh configuration and client/runtime data from Docker volumes
+1) Fresh Debian installation
+2) Existing Docker environment
 ```
 
-Restore scope:
+Both modes create or reuse the same Wazuh Docker layout under `/opt/wazuh/wazuh-docker/<single-node-or-multi-node>`. The backup script also supports both Wazuh stack modes selected by the installer:
 
 ```text
-1) Restore Wazuh configuration only - no client/runtime data
-2) Restore Wazuh configuration and client/runtime data from Docker volumes
+single-node
+multi-node
 ```
 
-Configuration-only backup saves the Docker Compose file, Wazuh Docker `config/` directory, local agent configuration if present, and a metadata/config archive. It does not back up client alerts, indexed events, dashboard state, queues, or other Docker volume data.
+Restore on the same Wazuh version that was used when the backup was created. Use this script for backup/restore, not as a Wazuh version migration mechanism.
 
-Client/runtime data backup archives matching Wazuh Docker volumes into:
+Docker volume archives are stored in:
 
 ```text
 /opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS/docker-volumes/
@@ -428,13 +434,13 @@ Client/runtime data backup archives matching Wazuh Docker volumes into:
 
 Backup directories are created with root-only permissions because they can contain Wazuh certificates, private keys, local agent configuration, alerts, indexed events, and other client data.
 
-The default backup destination is on the Wazuh VM itself. For backups that include client/runtime data, use a destination with enough free space, for example a mounted backup disk or remote backup path via `BACKUP_ROOT`. Keeping large backups under `/opt/easy-wazuh-backups` can fill the same filesystem used by Wazuh and Docker.
+The default backup destination is on the Wazuh VM itself. Use a destination with enough free space, for example a mounted backup disk or remote backup path via `BACKUP_ROOT`. Keeping full backups under `/opt/easy-wazuh-backups` can fill the same filesystem used by Wazuh and Docker.
 
-During restore, Docker volume archives are checked before extraction. Archives containing absolute paths or `..` path traversal entries are rejected. Restore only backups from trusted Easy-wazuh runs, especially when restoring client/runtime data.
+During restore, Docker volume archives are checked before extraction. Archives containing absolute paths or `..` path traversal entries are rejected. Restore only backups from trusted Easy-wazuh runs.
 
-For client/runtime data backups, the script stops running Wazuh containers before archiving Docker volumes, then restarts the services it stopped after the backup. This avoids capturing volume data while Wazuh is writing to it.
+For backups, the script stops the Wazuh Compose stack before copying configuration and archiving Docker volumes, then starts the stack automatically after a successful backup. It uses `docker compose down` without `-v`, so containers are removed cleanly while Docker volumes are preserved. To leave the stack stopped after backup, run with `BACKUP_RESTART_STACK=no`.
 
-For restores with client/runtime data, the script also stops running Wazuh containers before overwriting Docker volumes, then restarts the services it stopped after the restore.
+For restores, the script stops the Wazuh Compose stack before restoring configuration and overwriting Docker volumes, then restarts the stack if it was running before the restore and the restore completes successfully. It uses `docker compose down` without `-v`; existing Docker volumes are not deleted, but their contents are overwritten from the backup archives. If restore fails after the stack has been stopped, the stack is left stopped to avoid starting a partially restored state.
 
 If you need to stop the stack manually for maintenance, use:
 
@@ -453,13 +459,12 @@ Do not use `down -v` unless you intentionally want to delete Docker volume data.
 Non-interactive examples:
 
 ```bash
-sudo ACTION=backup STACK_TYPE=single-node BACKUP_CLIENT_DATA=no ./Backup_Wazuh-Config.sh
-sudo ACTION=backup STACK_TYPE=multi-node BACKUP_CLIENT_DATA=yes ./Backup_Wazuh-Config.sh
-sudo ACTION=restore RESTORE_DIR=/opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS RESTORE_CLIENT_DATA=no ./Backup_Wazuh-Config.sh
-sudo ACTION=restore RESTORE_DIR=/opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS RESTORE_CLIENT_DATA=yes ./Backup_Wazuh-Config.sh
+sudo ACTION=backup STACK_TYPE=single-node ./Backup_Wazuh-Config.sh
+sudo ACTION=backup STACK_TYPE=multi-node ./Backup_Wazuh-Config.sh
+sudo ACTION=restore RESTORE_DIR=/opt/easy-wazuh-backups/backup-YYYYMMDDHHMMSS ./Backup_Wazuh-Config.sh
 ```
 
-Restoring client/runtime data overwrites matching Docker volumes from the selected backup. The script displays warnings and asks for confirmation before restoring.
+Restoring overwrites matching Docker volumes from the selected backup. The script displays warnings and asks for confirmation before backing up or restoring.
 
 ## Ports
 
@@ -766,29 +771,35 @@ After agents are enrolled, review the dashboard modules for security events, vul
 
 ### Optional local agent FIM realtime
 
-By default, the installer does not modify a Wazuh agent installed on the Docker
-host. This avoids changing client endpoint monitoring policy unexpectedly.
+By default, the installer enables realtime File Integrity Monitoring on a local
+Wazuh agent installed on the Docker host, if one exists. This makes common
+system file changes visible faster during PoC and lab deployments.
 
 For lab deployments where the Docker host also runs a local Wazuh agent and you
 want File Integrity Monitoring events to appear immediately for common system
-paths, answer yes when the installer asks:
+paths, press `Enter` or answer yes when the installer asks:
 
 ```text
-Enable local File Integrity Monitoring (FIM) realtime on this host? [y/N]:
+Enable local File Integrity Monitoring (FIM) realtime on this host? [Y/n]:
 ```
 
-For non-interactive deployments, enable the optional realtime FIM configuration
-explicitly:
+For non-interactive deployments, keep the default enabled state explicitly with:
 
 ```bash
 sudo EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME=yes ./Wazuh-installer.sh
+```
+
+To disable this behavior, answer no or run:
+
+```bash
+sudo EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME=no ./Wazuh-installer.sh
 ```
 
 When enabled, the installer backs up `/var/ossec/etc/ossec.conf`, changes the
 local agent syscheck entry for `/etc,/usr/bin,/usr/sbin` to realtime mode, and
 restarts the local `wazuh-agent` service if it exists.
 
-Without this option, FIM can still work in scheduled mode according to the
+If disabled, FIM can still work in scheduled mode according to the
 agent's own `frequency` setting. Scheduled mode can leave the dashboard
 `FIM: Recent events` panel empty until a scan detects changes.
 

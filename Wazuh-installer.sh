@@ -404,18 +404,18 @@ prompt_local_agent_fim_realtime() {
   echo "  agent installed at /var/ossec, if one exists."
   echo "  The installer will back up /var/ossec/etc/ossec.conf, configure realtime"
   echo "  monitoring for /etc, /usr/bin, and /usr/sbin, then restart wazuh-agent."
-  echo "  This can increase event volume. Leave disabled unless the client approves"
+  echo "  This can increase event volume. Disable it if the client does not approve"
   echo "  realtime integrity monitoring on this host."
   echo ""
 
-  read -r -p "Enable local File Integrity Monitoring (FIM) realtime on this host? [y/N]: " ENABLE_FIM
+  read -r -p "Enable local File Integrity Monitoring (FIM) realtime on this host? [Y/n]: " ENABLE_FIM
 
   case "$ENABLE_FIM" in
-    y|Y|yes|YES)
-      EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME="yes"
+    n|N|no|NO)
+      EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME="no"
       ;;
     *)
-      EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME="no"
+      EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME="yes"
       ;;
   esac
 }
