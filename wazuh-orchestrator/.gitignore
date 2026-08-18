@@ -1,0 +1,9 @@
+.venv/
+logs/*.log
+logs/*.jsonl
+backups/*
+!backups/.gitkeep
+generated/*
+!generated/.gitkeep
+__pycache__/
+.pytest_cache/

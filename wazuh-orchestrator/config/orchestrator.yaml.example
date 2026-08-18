@@ -1,0 +1,41 @@
+workers:
+  baseline: 1
+  max: 6
+  target_utilization_percent: 55
+  warning_utilization_percent: 70
+  critical_utilization_percent: 85
+
+analysis:
+  sample_interval_seconds: 10
+  sample_count: 6
+  require_multiple_signals: true
+  minimum_pressure_signals: 2
+  worker_imbalance_percent: 35
+
+scaling:
+  max_delta_per_operation: 1
+  allow_scale_up: true
+  allow_scale_down: true
+
+capacity:
+  new_worker_safety_factor: 1.30
+
+host:
+  cpu_warning_percent: 70
+  cpu_block_percent: 85
+  memory_warning_percent: 75
+  memory_block_percent: 85
+  iowait_block_percent: 15
+  disk_free_min_percent: 15
+  reserve_cpu_percent_after_scale: 25
+  reserve_memory_percent_after_scale: 25
+
+safety:
+  require_multi_node_for_scaling: true
+  require_cluster_healthy: true
+  require_nginx_healthy: true
+  require_complete_host_metrics: true
+  backup_before_change: true
+
+scale_down:
+  drain_seconds: 60

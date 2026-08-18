@@ -1,0 +1,1 @@
+{"workers": [{"name": "wazuh-manager02.local", "restart_count": 4}]}

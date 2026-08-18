@@ -1,0 +1,1 @@
+{"containers": ["wazuh.indexer", "wazuh.manager", "wazuh.dashboard"]}

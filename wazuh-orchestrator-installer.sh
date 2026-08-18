@@ -1,0 +1,77 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCH_DIR="$PROJECT_DIR/wazuh-orchestrator"
+
+is_debian_supported() {
+  [ -r /etc/os-release ] || return 1
+  . /etc/os-release
+  [ "${ID:-}" = "debian" ] && { [ "${VERSION_ID:-}" = "12" ] || [ "${VERSION_ID:-}" = "13" ]; }
+}
+
+has_docker() {
+  command -v docker >/dev/null 2>&1
+}
+
+has_compose() {
+  has_docker && docker compose version >/dev/null 2>&1
+}
+
+install_native() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "Error: python3 was not detected."
+    exit 1
+  fi
+  python3 -m venv "$ORCH_DIR/.venv"
+  "$ORCH_DIR/.venv/bin/pip" install -r "$ORCH_DIR/requirements.txt"
+  echo "Native installation complete."
+  echo "Run: $ORCH_DIR/.venv/bin/python $ORCH_DIR/wazuh-orchestrator.py status"
+}
+
+print_docker_warning() {
+  echo "Container mode may require mounting /var/run/docker.sock later."
+  echo "That socket grants very high privilege over the Docker host."
+}
+
+main() {
+  if ! is_debian_supported; then
+    echo "Error: supported platforms are Debian 12 and Debian 13."
+    exit 1
+  fi
+
+  if [ ! -d "$ORCH_DIR" ]; then
+    echo "Error: orchestrator project directory was not found: $ORCH_DIR"
+    exit 1
+  fi
+
+  if has_docker && has_compose; then
+    echo "Wazuh Orchestrator installation"
+    echo ""
+    echo "1) Docker container"
+    echo "2) Native Python"
+    echo "3) Exit"
+    read -r -p "Choose installation mode [1/2/3]: " choice
+    case "$choice" in
+      1)
+        print_docker_warning
+        echo "Dockerfile is ready. Build is intentionally not run by this installer."
+        ;;
+      2) install_native ;;
+      *) exit 0 ;;
+    esac
+  else
+    echo "Docker was not detected."
+    echo ""
+    echo "1) Native Python"
+    echo "2) Exit"
+    read -r -p "Choose installation mode [1/2]: " choice
+    case "$choice" in
+      1) install_native ;;
+      *) exit 0 ;;
+    esac
+  fi
+}
+
+main "$@"

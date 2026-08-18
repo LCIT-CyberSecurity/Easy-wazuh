@@ -1,0 +1,1 @@
+{"containers": ["wazuh-indexer01.local", "wazuh-manager01.local", "wazuh-manager02.local", "nginx"]}
