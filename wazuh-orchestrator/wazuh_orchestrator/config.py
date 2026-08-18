@@ -13,6 +13,7 @@ from .models import (
     CapacitySettings,
     ConfigurationError,
     HostSettings,
+    LoggingSettings,
     OrchestratorConfig,
     RuntimeSettings,
     SafetySettings,
@@ -46,6 +47,7 @@ def load_config(path: Path | None = None) -> OrchestratorConfig:
         host=_section(HostSettings, data.get("host", {})),
         safety=_section(SafetySettings, data.get("safety", {})),
         scale_down=_section(ScaleDownSettings, data.get("scale_down", {})),
+        logging=_section(LoggingSettings, data.get("logging", {})),
         runtime=_runtime(data.get("runtime", {})),
     )
     validate_config(cfg)
@@ -91,6 +93,8 @@ def validate_config(cfg: OrchestratorConfig) -> None:
         raise ConfigurationError("capacity.new_worker_safety_factor must be >= 1.")
     if cfg.scale_down.drain_seconds < 0:
         raise ConfigurationError("scale_down.drain_seconds must be >= 0.")
+    if cfg.logging.level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        raise ConfigurationError("logging.level must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL.")
     _validate_percentages(cfg)
 
 

@@ -46,3 +46,13 @@ def test_sample_count_refused(tmp_path):
 def test_max_delta_must_be_one(tmp_path):
     with pytest.raises(ConfigurationError):
         load_config(write_cfg(tmp_path, "scaling:\n  max_delta_per_operation: 2\n"))
+
+
+def test_logging_level_valid(tmp_path):
+    cfg = load_config(write_cfg(tmp_path, "logging:\n  level: DEBUG\n"))
+    assert cfg.logging.level == "DEBUG"
+
+
+def test_logging_level_invalid_refused(tmp_path):
+    with pytest.raises(ConfigurationError):
+        load_config(write_cfg(tmp_path, "logging:\n  level: TRACE\n"))

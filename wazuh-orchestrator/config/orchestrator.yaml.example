@@ -39,3 +39,6 @@ safety:
 
 scale_down:
   drain_seconds: 60
+
+logging:
+  level: INFO

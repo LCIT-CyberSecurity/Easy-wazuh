@@ -23,6 +23,7 @@ from wazuh_orchestrator.scaler import build_plan, scale
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Easy-Wazuh Orchestrator")
     parser.add_argument("--config", type=Path)
+    parser.add_argument("--debug", action="store_true", help="Force DEBUG logging for this run.")
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "analyze"):
         p = sub.add_parser(name)
@@ -38,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
         root = Path(__file__).resolve().parent
-        configure_logging(root)
+        configure_logging(root, "DEBUG" if args.debug else cfg.logging.level)
         snapshot = _snapshot(cfg)
         if args.command == "status":
             return _status(snapshot, cfg, args.json)

@@ -93,6 +93,11 @@ class ScaleDownSettings:
 
 
 @dataclass(frozen=True)
+class LoggingSettings:
+    level: str = "INFO"
+
+
+@dataclass(frozen=True)
 class RuntimeSettings:
     easy_wazuh_root: Path = Path("/opt/wazuh/wazuh-docker")
     orchestrator_root: Path = Path("wazuh-orchestrator")
@@ -113,6 +118,7 @@ class OrchestratorConfig:
     host: HostSettings = field(default_factory=HostSettings)
     safety: SafetySettings = field(default_factory=SafetySettings)
     scale_down: ScaleDownSettings = field(default_factory=ScaleDownSettings)
+    logging: LoggingSettings = field(default_factory=LoggingSettings)
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
 
 

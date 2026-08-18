@@ -42,3 +42,12 @@ def test_cli_plan(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
     assert cli.main(["plan", "--workers", "3"]) == 0
     assert "Action:          scale_up" in capsys.readouterr().out
+
+
+def test_cli_debug_overrides_configured_log_level(monkeypatch):
+    cli = load_cli()
+    levels = []
+    monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
+    monkeypatch.setattr(cli, "configure_logging", lambda root, level: levels.append(level))
+    assert cli.main(["--debug", "status"]) == 0
+    assert levels == ["DEBUG"]

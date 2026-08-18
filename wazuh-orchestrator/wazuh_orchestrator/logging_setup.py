@@ -12,12 +12,12 @@ from datetime import datetime, timezone
 SECRET_KEYS = ("password", "token", "secret", "key", "credential")
 
 
-def configure_logging(root: Path) -> None:
+def configure_logging(root: Path, level: str = "INFO") -> None:
     log_dir = root / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(log_dir / "wazuh-orchestrator.log", maxBytes=1_000_000, backupCount=3)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+    logging.basicConfig(level=getattr(logging, level.upper()), handlers=[handler], force=True)
 
 
 def redact(value: object) -> object:
