@@ -124,15 +124,12 @@ def _worker_pressure_signals(workers: tuple[WorkerMetrics, ...], cfg: Orchestrat
     cpus = [w.cpu_percent for w in workers if w.cpu_percent is not None]
     mems = [w.memory_percent for w in workers if w.memory_percent is not None]
     queues = [w.queue_delta for w in workers if w.queue_delta is not None]
-    restarts = [w.restart_count for w in workers if w.restart_count is not None]
     if cpus and median(cpus) >= cfg.workers.warning_utilization_percent:
         signals.append("cpu")
     if mems and median(mems) >= cfg.workers.warning_utilization_percent:
         signals.append("memory")
     if queues and sum(1 for q in queues if q > 0) >= max(1, len(queues) // 2):
         signals.append("queue_growth")
-    if restarts and max(restarts) >= 3:
-        signals.append("restart_loop")
     return signals
 
 

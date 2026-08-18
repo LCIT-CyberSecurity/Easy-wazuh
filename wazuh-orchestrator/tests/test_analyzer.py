@@ -79,3 +79,9 @@ def test_max_workers_reached():
 def test_restart_loop_not_auto_plus_one():
     r = analyze(snap(workers=workers(cpu=30, mem=30, restarts=4)), cfg())
     assert r.recommended_next_workers is None
+
+
+def test_restart_loop_plus_cpu_not_enough_for_scale():
+    r = analyze(snap(workers=workers(cpu=85, mem=20, q=0, restarts=4)), cfg())
+    assert "WORKER_PRESSURE" not in r.diagnostics
+    assert r.recommended_next_workers is None

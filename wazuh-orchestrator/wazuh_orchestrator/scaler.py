@@ -98,6 +98,8 @@ def _validate_scale_up(snapshot: AnalysisInput, cfg: OrchestratorConfig, result:
     projection = can_host_accept_worker(snapshot.host, snapshot.workers, cfg)
     if not projection.can_accept:
         raise SafetyError(f"SCALING BLOCKED: {projection.reason}")
+    if result.recommended_next_workers != snapshot.cluster.worker_count + 1:
+        raise SafetyError("Scale-up is blocked because analysis does not recommend adding a worker.")
 
 
 def _select_removable_worker(snapshot: AnalysisInput, cfg: OrchestratorConfig) -> str:

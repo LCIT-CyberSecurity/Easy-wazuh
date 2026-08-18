@@ -56,6 +56,12 @@ def test_projected_reserve_insuffisante_refused():
         build_plan(s, cfg(), 3)
 
 
+def test_healthy_cluster_scale_up_refused_without_recommendation():
+    workers = (WorkerMetrics("w1", 20, 20), WorkerMetrics("w2", 20, 20))
+    with pytest.raises(SafetyError, match="does not recommend"):
+        build_plan(snapshot(workers=workers), cfg(), 3)
+
+
 def test_plan_scale_down_3_to_2():
     c = ClusterState("multi-node", "m", ("w1", "w2", "w3"), ("i",), "d", "nginx", None, None, "default", cluster_healthy=True, nginx_healthy=True)
     ws = (WorkerMetrics("w1", 20, 20, baseline_worker=True), WorkerMetrics("w2", 20, 20, managed_by_orchestrator=True), WorkerMetrics("w3", 20, 20, managed_by_orchestrator=True))
