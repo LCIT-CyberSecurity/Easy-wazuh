@@ -53,7 +53,7 @@ def test_scale_up_success_writes_audit(tmp_path):
     backend = Backend()
     nginx_conf = tmp_path / "nginx.conf"
     nginx_conf.write_text("upstream wazuh_managers {\n}\n", encoding="utf-8")
-    plan = scale(snapshot(3), cfg(), 4, backend, NginxConfigManager(nginx_conf), tmp_path, yes=True)
+    plan = scale(snapshot(3), cfg(), 4, backend, NginxConfigManager(nginx_conf), tmp_path)
     assert plan.action == "scale_up"
     assert ("up", "-d", "wazuh-manager04.local") in backend.commands
     audit = (tmp_path / "logs" / "audit.jsonl").read_text(encoding="utf-8")
@@ -62,7 +62,7 @@ def test_scale_up_success_writes_audit(tmp_path):
 
 def test_docker_start_failure_records_failed_audit(tmp_path):
     with pytest.raises(ScalingError):
-        scale(snapshot(3), cfg(), 4, Backend(fail_up=True), None, tmp_path, yes=True)
+        scale(snapshot(3), cfg(), 4, Backend(fail_up=True), None, tmp_path)
     assert '"result": "failed"' in (tmp_path / "logs" / "audit.jsonl").read_text(encoding="utf-8")
 
 
@@ -71,7 +71,7 @@ def test_nginx_failure_rolls_back_new_worker(tmp_path):
     nginx_conf = tmp_path / "nginx.conf"
     nginx_conf.write_text("upstream wazuh_managers {\n}\n", encoding="utf-8")
     with pytest.raises(ScalingError):
-        scale(snapshot(3), cfg(), 4, backend, NginxConfigManager(nginx_conf, validator=lambda path: False), tmp_path, yes=True)
+        scale(snapshot(3), cfg(), 4, backend, NginxConfigManager(nginx_conf, validator=lambda path: False), tmp_path)
     assert ("stop", "wazuh-manager04.local") in backend.commands
     assert ("rm", "-f", "wazuh-manager04.local") in backend.commands
 
@@ -82,13 +82,13 @@ def test_scale_down_drain_before_stop(tmp_path):
         def run_compose(self, *args):
             events.append(args[0])
             super().run_compose(*args)
-    scale(snapshot(3), cfg(), 2, OrderedBackend(), None, tmp_path, yes=True, sleep=lambda seconds: events.append("drain"))
+    scale(snapshot(3), cfg(), 2, OrderedBackend(), None, tmp_path, sleep=lambda seconds: events.append("drain"))
     assert events == ["drain", "stop", "rm"]
 
 
 def test_scale_down_rm_never_uses_volume_flag(tmp_path):
     backend = Backend()
-    scale(snapshot(3), cfg(), 2, backend, None, tmp_path, yes=True, sleep=lambda seconds: None)
+    scale(snapshot(3), cfg(), 2, backend, None, tmp_path, sleep=lambda seconds: None)
     assert all("-v" not in cmd for cmd in backend.commands)
 
 
@@ -123,7 +123,7 @@ def test_healthcheck_failure_path_is_reported(tmp_path):
         def apply_worker(self, worker, backup_dir):
             raise ScalingError("healthcheck failure")
     with pytest.raises(ScalingError, match="healthcheck failure"):
-        scale(snapshot(3), cfg(), 4, backend, FailingNginx(), tmp_path, yes=True)
+        scale(snapshot(3), cfg(), 4, backend, FailingNginx(), tmp_path)
 
 
 def test_cluster_join_failure_path_is_reported(tmp_path):
@@ -132,9 +132,9 @@ def test_cluster_join_failure_path_is_reported(tmp_path):
         def apply_worker(self, worker, backup_dir):
             raise ScalingError("cluster join failure")
     with pytest.raises(ScalingError, match="cluster join failure"):
-        scale(snapshot(3), cfg(), 4, backend, FailingNginx(), tmp_path, yes=True)
+        scale(snapshot(3), cfg(), 4, backend, FailingNginx(), tmp_path)
 
 
 def test_lock_file_created_for_scale(tmp_path):
-    scale(snapshot(3), cfg(), 2, Backend(), None, tmp_path, yes=True, sleep=lambda seconds: None)
+    scale(snapshot(3), cfg(), 2, Backend(), None, tmp_path, sleep=lambda seconds: None)
     assert (tmp_path / "generated" / "scale.lock").exists()

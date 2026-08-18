@@ -34,6 +34,12 @@ class LocalDockerDiscovery:
 
 
 def discover_installation(root: Path = Path("/opt/wazuh/wazuh-docker"), docker_client: DockerDiscoveryClient | None = None) -> ClusterState:
+    """Discover Easy-Wazuh topology from files and an optional Docker adapter.
+
+    Local development can pass a fake Docker client. When no files and no Docker
+    runtime are present, the caller receives an explicit unknown state instead
+    of a traceback.
+    """
     docker_client = docker_client or LocalDockerDiscovery()
     file_state = discover_from_files(root)
     docker_available = docker_client.available()
@@ -58,6 +64,11 @@ def discover_installation(root: Path = Path("/opt/wazuh/wazuh-docker"), docker_c
 
 
 def discover_from_files(root: Path) -> ClusterState:
+    """Discover the generated Easy-Wazuh compose stack under /opt/wazuh.
+
+    Multi-node is preferred when both layouts exist because only multi-node
+    supports horizontal worker scaling in V1.
+    """
     single = root / "single-node" / "docker-compose.yml"
     multi = root / "multi-node" / "docker-compose.yml"
     if multi.exists():
@@ -78,6 +89,7 @@ def discover_from_files(root: Path) -> ClusterState:
 
 
 def discover_from_compose(compose_file: Path) -> ClusterState:
+    """Parse one Compose file into a ClusterState for tests and offline checks."""
     data = yaml.safe_load(compose_file.read_text(encoding="utf-8")) or {}
     services = data.get("services", {})
     mode = "multi-node" if isinstance(services, dict) and ("nginx" in services or any("manager02" in name for name in services)) else "single-node"

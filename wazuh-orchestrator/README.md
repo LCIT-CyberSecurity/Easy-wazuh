@@ -7,8 +7,12 @@ It does not perform automatic scaling. The administrator must run:
 ```bash
 python3 wazuh-orchestrator.py analyze
 python3 wazuh-orchestrator.py plan --workers 3
-python3 wazuh-orchestrator.py scale --workers 3 --yes
+python3 wazuh-orchestrator.py scale --workers 3
 ```
+
+The `scale` command prints the plan and requires typing `SCALE` before it
+changes anything. Use `plan` for a dry run; it does not modify files or
+containers.
 
 Use `--debug` to force DEBUG logs for one run. Other log levels are configured
 in YAML:

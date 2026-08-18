@@ -27,7 +27,19 @@ install_native() {
   python3 -m venv "$ORCH_DIR/.venv"
   "$ORCH_DIR/.venv/bin/pip" install -r "$ORCH_DIR/requirements.txt"
   echo "Native installation complete."
-  echo "Run: $ORCH_DIR/.venv/bin/python $ORCH_DIR/wazuh-orchestrator.py status"
+  echo ""
+  echo "Typical manual workflow:"
+  echo "  1. Inspect current deployment:"
+  echo "     $ORCH_DIR/.venv/bin/python $ORCH_DIR/wazuh-orchestrator.py status"
+  echo "  2. Analyze capacity:"
+  echo "     $ORCH_DIR/.venv/bin/python $ORCH_DIR/wazuh-orchestrator.py analyze"
+  echo "  3. Prepare a dry-run plan:"
+  echo "     $ORCH_DIR/.venv/bin/python $ORCH_DIR/wazuh-orchestrator.py plan --workers <target>"
+  echo "  4. Apply manually after reviewing the plan:"
+  echo "     sudo $ORCH_DIR/.venv/bin/python $ORCH_DIR/wazuh-orchestrator.py scale --workers <target>"
+  echo ""
+  echo "The scale command asks for explicit confirmation before changing anything."
+  echo "Use --debug only for troubleshooting."
 }
 
 print_docker_warning() {

@@ -17,6 +17,7 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
 
 
 def validate_service_name(name: str) -> None:
+    """Reject service names that could lead to path or command injection."""
     if not SAFE_NAME.fullmatch(name) or ".." in name:
         raise ScalingError(f"Unsafe service name: {name}")
 
@@ -30,6 +31,7 @@ class ComposeBackend:
         self.runner = runner
 
     def next_worker_name(self, cluster: ClusterState) -> str:
+        """Return the first unused worker name matching Easy-Wazuh conventions."""
         suffix = _suffix(cluster.master or "wazuh-manager01.local")
         existing = set(cluster.workers) | ({cluster.master} if cluster.master else set())
         index = 2
@@ -41,6 +43,11 @@ class ComposeBackend:
             index += 1
 
     def generate_override(self, cluster: ClusterState, worker_name: str) -> Path:
+        """Write the orchestrator Compose override for one additional worker.
+
+        INTEGRATION_VALIDATION_REQUIRED: certificate and volume details must be
+        confirmed on a real Easy-Wazuh Docker host before production use.
+        """
         validate_service_name(worker_name)
         master = cluster.master or "wazuh-manager01.local"
         data = {
@@ -70,9 +77,11 @@ class ComposeBackend:
         return self.override_file
 
     def compose_command(self, *args: str) -> list[str]:
+        """Build a shell-free docker compose command with base and override files."""
         return ["docker", "compose", "-f", str(self.compose_file), "-f", str(self.override_file), *args]
 
     def run_compose(self, *args: str) -> subprocess.CompletedProcess[str]:
+        """Execute Compose through an injectable runner; never uses shell=True."""
         return self.runner(
             self.compose_command(*args),
             cwd=self.project_directory,
@@ -91,6 +100,7 @@ class NginxConfigManager:
         self.reloader = reloader or (lambda: True)
 
     def render_with_worker(self, worker: str) -> str:
+        """Return NGINX config content with one worker added once."""
         validate_service_name(worker)
         content = self.config_path.read_text(encoding="utf-8") if self.config_path.exists() else "upstream wazuh_managers {\n}\n"
         line = f"    server {worker}:1514;"
@@ -99,9 +109,11 @@ class NginxConfigManager:
         return content.replace("upstream wazuh_managers {\n", f"upstream wazuh_managers {{\n{line}\n")
 
     def apply_worker(self, worker: str, backup_dir: Path) -> None:
+        """Backup, atomically apply and validate an NGINX worker addition."""
         self._apply_content(self.render_with_worker(worker), backup_dir)
 
     def remove_worker(self, worker: str, backup_dir: Path) -> None:
+        """Backup, atomically apply and validate an NGINX worker removal."""
         validate_service_name(worker)
         content = self.config_path.read_text(encoding="utf-8") if self.config_path.exists() else ""
         lines = [line for line in content.splitlines() if f"server {worker}:1514;" not in line]

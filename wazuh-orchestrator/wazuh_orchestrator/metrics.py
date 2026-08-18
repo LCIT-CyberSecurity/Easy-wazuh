@@ -17,6 +17,11 @@ class DockerRuntime(Protocol):
 
 
 def collect_host_metrics(install_path: Path = Path("/opt/wazuh")) -> HostMetrics:
+    """Collect host capacity metrics without inventing unavailable values.
+
+    Linux-only signals such as I/O wait are returned as None when unavailable,
+    which the analyzer treats as UNKNOWN rather than zero.
+    """
     try:
         vcpu = psutil.cpu_count() or None
         cpu = psutil.cpu_percent(interval=None)
@@ -65,6 +70,7 @@ class DockerMetricsCollector:
         self._docker = docker_runtime
 
     def collect(self) -> tuple[ContainerMetrics, ...]:
+        """Convert injected Docker container objects into typed metrics."""
         metrics: list[ContainerMetrics] = []
         for container in self._docker.list_containers():
             attrs = getattr(container, "attrs", {}) or {}

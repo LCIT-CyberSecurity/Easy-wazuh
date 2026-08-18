@@ -51,3 +51,45 @@ def test_cli_debug_overrides_configured_log_level(monkeypatch):
     monkeypatch.setattr(cli, "configure_logging", lambda root, level: levels.append(level))
     assert cli.main(["--debug", "status"]) == 0
     assert levels == ["DEBUG"]
+
+
+class Backend:
+    def __init__(self):
+        self.commands = []
+
+    def next_worker_name(self, cluster):
+        return "wazuh-manager04.local"
+
+    def generate_override(self, cluster, worker):
+        self.commands.append(("generate", worker))
+
+    def run_compose(self, *args):
+        self.commands.append(args)
+
+
+def test_cli_scale_cancelled_without_exact_confirmation(monkeypatch, capsys):
+    cli = load_cli()
+    backend = Backend()
+    monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
+    monkeypatch.setattr(cli, "_backend", lambda snapshot, root, cfg: backend)
+    monkeypatch.setattr("builtins.input", lambda prompt: "no")
+    assert cli.main(["scale", "--workers", "3"]) == 1
+    assert backend.commands == []
+    assert "Scaling cancelled." in capsys.readouterr().out
+
+
+def test_cli_scale_requires_no_yes_flag(monkeypatch):
+    cli = load_cli()
+    monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
+    assert cli.main(["scale", "--workers", "3", "--" + "yes"]) == 2
+
+
+def test_cli_scale_runs_after_exact_confirmation(monkeypatch):
+    cli = load_cli()
+    backend = Backend()
+    monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
+    monkeypatch.setattr(cli, "_backend", lambda snapshot, root, cfg: backend)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr("builtins.input", lambda prompt: "SCALE")
+    assert cli.main(["scale", "--workers", "3"]) == 0
+    assert ("up", "-d", "wazuh-manager04.local") in backend.commands

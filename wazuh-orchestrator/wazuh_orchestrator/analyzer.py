@@ -23,6 +23,12 @@ DIAGNOSTICS = {
 
 
 def analyze(snapshot: AnalysisInput, cfg: OrchestratorConfig) -> AnalysisResult:
+    """Diagnose capacity pressure and recommend at most one worker step.
+
+    The analyzer never calls Docker and never changes infrastructure. It combines
+    worker, host, indexer, cluster and NGINX signals, then fails closed when data
+    quality or safety gates are insufficient.
+    """
     diagnostics: list[str] = []
     explanations: list[str] = []
     signals = _worker_pressure_signals(snapshot.workers, cfg)
@@ -93,6 +99,12 @@ def analyze(snapshot: AnalysisInput, cfg: OrchestratorConfig) -> AnalysisResult:
 
 
 def can_host_accept_worker(host, workers: tuple[WorkerMetrics, ...], cfg: OrchestratorConfig) -> HostCapacityProjection:
+    """Project host capacity after adding one worker.
+
+    Unknown critical host metrics block scale-up. The projection reserves CPU and
+    RAM after applying the configured safety factor, so adding a worker does not
+    worsen an already constrained host.
+    """
     required = (host.cpu_percent, host.memory_percent, host.disk_free_percent)
     if cfg.safety.require_complete_host_metrics and any(v is None for v in required):
         return HostCapacityProjection(False, None, None, None, None, "HOST_CAPACITY_UNKNOWN")

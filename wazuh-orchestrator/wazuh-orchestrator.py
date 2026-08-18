@@ -34,8 +34,10 @@ def main(argv: list[str] | None = None) -> int:
     p_plan.add_argument("--workers", type=int, required=True)
     p_scale = sub.add_parser("scale")
     p_scale.add_argument("--workers", type=int, required=True)
-    p_scale.add_argument("--yes", action="store_true")
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return int(exc.code)
     try:
         cfg = load_config(args.config)
         root = Path(__file__).resolve().parent
@@ -51,9 +53,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("plan", "scale"):
             backend = _backend(snapshot, root, cfg)
             plan = build_plan(snapshot, cfg, args.workers, backend)
-            if args.command == "scale":
-                plan = scale(snapshot, cfg, args.workers, backend, None, root, yes=args.yes, sleep=time.sleep)
             print_plan(plan)
+            if args.command == "scale":
+                if not _confirm_scale(plan):
+                    print("Scaling cancelled.")
+                    return 1
+                scale(snapshot, cfg, args.workers, backend, None, root, sleep=time.sleep)
             return 0
     except (ConfigurationError, DiscoveryError, SafetyError, ScalingError) as exc:
         print(str(exc), file=sys.stderr)
@@ -124,6 +129,15 @@ def _print_analysis(snapshot: AnalysisInput, cfg, result, as_json: bool) -> int:
     print(result.recommendation)
     print(f"\nConfidence       {result.confidence}")
     return 0
+
+
+def _confirm_scale(plan) -> bool:
+    """Require an explicit human confirmation before any scale transaction."""
+    if plan.action == "none":
+        return True
+    print("")
+    print("Type SCALE to apply this change. Any other input cancels the operation.")
+    return input("Confirmation: ").strip() == "SCALE"
 
 
 def print_plan(plan) -> None:

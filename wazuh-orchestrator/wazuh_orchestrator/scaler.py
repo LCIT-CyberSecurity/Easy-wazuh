@@ -13,6 +13,11 @@ from .models import AnalysisInput, AnalysisResult, OrchestratorConfig, SafetyErr
 
 
 def build_plan(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int, backend: ComposeBackend | None = None) -> ScalingPlan:
+    """Build a dry-run scaling plan after enforcing V1 safety limits.
+
+    This function does not modify infrastructure. It is intentionally safe to use
+    from the CLI `plan` command and from tests without Docker.
+    """
     _validate_limits(snapshot, cfg, target_workers)
     current = snapshot.cluster.worker_count
     if target_workers == current:
@@ -36,12 +41,16 @@ def build_plan(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers:
     )
 
 
-def scale(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int, backend: ComposeBackend, nginx: NginxConfigManager | None, root: Path, *, yes: bool = False, sleep: Callable[[int], None] | None = None) -> ScalingPlan:
+def scale(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int, backend: ComposeBackend, nginx: NginxConfigManager | None, root: Path, *, sleep: Callable[[int], None] | None = None) -> ScalingPlan:
+    """Execute an already-confirmed scaling transaction.
+
+    The CLI owns human confirmation. This function owns locking, backups, backend
+    calls, rollback attempts and audit records. Tests inject fake backends so no
+    Docker daemon is required locally.
+    """
     plan = build_plan(snapshot, cfg, target_workers, backend)
     if plan.action == "none":
         return plan
-    if not yes:
-        raise SafetyError("Interactive confirmation is required unless --yes is provided.")
     lock_path = root / "generated" / "scale.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w", encoding="utf-8") as lock:

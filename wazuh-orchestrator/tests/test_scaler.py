@@ -4,7 +4,7 @@ import pytest
 
 from wazuh_orchestrator.config import load_config
 from wazuh_orchestrator.models import AnalysisInput, ClusterState, HostMetrics, IndexerState, SafetyError, WorkerMetrics
-from wazuh_orchestrator.scaler import build_plan, scale
+from wazuh_orchestrator.scaler import build_plan
 
 
 def cfg():
@@ -80,10 +80,3 @@ def test_baseline_worker_never_removed():
 def test_idempotent_target_already_reached():
     plan = build_plan(snapshot(), cfg(), 2)
     assert plan.action == "none"
-
-
-def test_confirmation_required(tmp_path):
-    class Backend:
-        def next_worker_name(self, cluster): return "wazuh-manager04.local"
-    with pytest.raises(SafetyError):
-        scale(snapshot(), cfg(), 3, Backend(), None, tmp_path)
