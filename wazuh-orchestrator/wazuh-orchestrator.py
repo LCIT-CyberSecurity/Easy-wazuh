@@ -16,8 +16,9 @@ from wazuh_orchestrator.config import load_config
 from wazuh_orchestrator.discovery import discover_installation
 from wazuh_orchestrator.logging_setup import configure_logging
 from wazuh_orchestrator.metrics import collect_host_metrics
-from wazuh_orchestrator.models import AnalysisInput, ConfigurationError, DiscoveryError, HostMetrics, IndexerState, SafetyError, ScalingError, WorkerMetrics
+from wazuh_orchestrator.models import AnalysisInput, ConfigurationError, DiscoveryError, DashboardState, HostMetrics, IndexerState, SafetyError, ScalingError, WorkerMetrics
 from wazuh_orchestrator.scaler import build_plan, scale
+from wazuh_orchestrator.transactions import TransactionStore
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,8 +44,9 @@ def main(argv: list[str] | None = None) -> int:
         root = Path(__file__).resolve().parent
         configure_logging(root, "DEBUG" if args.debug else cfg.logging.level)
         snapshot = _snapshot(cfg)
+        transaction_state = TransactionStore(root).reconcile_read_only()
         if args.command == "status":
-            return _status(snapshot, cfg, args.json)
+            return _status(snapshot, cfg, args.json, transaction_state)
         if args.command == "analyze":
             if args.duration:
                 cfg = _duration_config(cfg, args.duration)
@@ -67,12 +69,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _snapshot(cfg) -> AnalysisInput:
-    cluster = discover_installation(cfg.runtime.easy_wazuh_root)
+    cluster = discover_installation(cfg.runtime.easy_wazuh_root, metadata_path=cfg.runtime.deployment_metadata_path)
     if cluster.mode == "unknown" and not cluster.docker_available:
         raise DiscoveryError("Docker runtime not detected.\nNo running Easy-Wazuh installation can be inspected on this host.")
     host = collect_host_metrics(cfg.runtime.easy_wazuh_root.parent)
     workers = tuple(WorkerMetrics(name=w, cpu_percent=None, memory_percent=None, baseline_worker=i < cfg.workers.baseline) for i, w in enumerate(cluster.workers))
-    return AnalysisInput(cluster=cluster, host=host, workers=workers, indexer=IndexerState(names=cluster.indexers, healthy=cluster.cluster_healthy))
+    return AnalysisInput(cluster=cluster, host=host, workers=workers, indexer=IndexerState(names=cluster.indexers, healthy=cluster.cluster_healthy), dashboard=DashboardState(name=cluster.dashboard))
 
 
 def _duration_config(cfg, duration: int):
@@ -86,9 +88,10 @@ def _backend(snapshot: AnalysisInput, root: Path, cfg) -> ComposeBackend:
     return ComposeBackend(snapshot.cluster.compose_file, root / "generated" / "docker-compose.orchestrator.yml", snapshot.cluster.compose_project_directory, cfg.runtime.compose_timeout_seconds)
 
 
-def _status(snapshot: AnalysisInput, cfg, as_json: bool) -> int:
+def _status(snapshot: AnalysisInput, cfg, as_json: bool, transaction_state=None) -> int:
+    transaction_state = transaction_state or {}
     if as_json:
-        print(json.dumps(_jsonable({"cluster": asdict(snapshot.cluster), "host": asdict(snapshot.host), "baseline": cfg.workers.baseline, "max": cfg.workers.max}), sort_keys=True))
+        print(json.dumps(_jsonable({"cluster": asdict(snapshot.cluster), "host": asdict(snapshot.host), "baseline": cfg.workers.baseline, "max": cfg.workers.max, "transaction_state": transaction_state}), sort_keys=True))
         return 0
     print("Easy-Wazuh Orchestrator")
     print("=======================")
@@ -102,6 +105,10 @@ def _status(snapshot: AnalysisInput, cfg, as_json: bool) -> int:
     print(f"Dashboard        {snapshot.cluster.dashboard or 'UNKNOWN'}")
     print(f"NGINX            {snapshot.cluster.nginx or 'not detected'}")
     print(f"Cluster health   {_fmt(snapshot.cluster.cluster_healthy)}")
+    if snapshot.cluster.naming_policy:
+        print(f"Naming prefix    {snapshot.cluster.naming_policy.manager_prefix}")
+        print(f"Naming width     {snapshot.cluster.naming_policy.manager_number_width}")
+    print(f"Transaction      {'INCOMPLETE' if transaction_state.get('incomplete_transaction') else 'clean'}")
     print(f"Host CPU         {_pct(snapshot.host.cpu_percent)}")
     print(f"Host RAM         {_pct(snapshot.host.memory_percent)}")
     return 0

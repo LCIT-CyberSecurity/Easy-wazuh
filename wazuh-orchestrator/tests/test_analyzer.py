@@ -85,3 +85,40 @@ def test_restart_loop_plus_cpu_not_enough_for_scale():
     r = analyze(snap(workers=workers(cpu=85, mem=20, q=0, restarts=4)), cfg())
     assert "WORKER_PRESSURE" not in r.diagnostics
     assert r.recommended_next_workers is None
+
+from wazuh_orchestrator.models import DashboardState
+
+
+def test_dashboard_pressure_detected_without_scaling():
+    base = snap()
+    r = analyze(AnalysisInput(base.cluster, base.host, base.workers, base.indexer, DashboardState("wazuh-dashboard01.local", True, 90, 20, 0)), cfg())
+    assert "DASHBOARD_PRESSURE" in r.diagnostics
+    assert r.recommended_next_workers is None
+    assert "Dashboard" in r.recommendation
+
+
+def test_dashboard_missing_detected():
+    c = ClusterState("multi-node", "wazuh-manager01.local", ("wazuh-manager02.local",), ("i",), None, "nginx", None, None, "default", cluster_healthy=True, nginx_healthy=True)
+    r = analyze(snap(cluster=c, workers=workers(count=1)), cfg())
+    assert "DASHBOARD_PRESSURE" in r.diagnostics
+
+
+def test_single_node_is_unsupported_for_worker_scaling():
+    c = cluster(mode="single-node")
+    r = analyze(snap(cluster=c, workers=()), cfg())
+    assert "UNSUPPORTED_DEPLOYMENT_MODE" in r.diagnostics
+    assert r.recommended_next_workers is None
+
+
+def test_post_scale_stabilizing_blocks_second_recommendation():
+    c = ClusterState("multi-node", "wazuh-manager01.local", ("wazuh-manager02.local", "wazuh-manager03.local"), ("i",), "d", "nginx", None, None, "default", cluster_healthy=True, nginx_healthy=True, details={"post_scale_stabilizing": True})
+    r = analyze(snap(cluster=c, workers=workers(cpu=90, mem=90, q=3)), cfg())
+    assert "POST_SCALE_STABILIZING" in r.diagnostics
+    assert r.recommended_next_workers is None
+
+
+def test_incomplete_transaction_blocks_recommendation():
+    c = ClusterState("multi-node", "wazuh-manager01.local", ("wazuh-manager02.local", "wazuh-manager03.local"), ("i",), "d", "nginx", None, None, "default", cluster_healthy=True, nginx_healthy=True, details={"incomplete_transaction": True})
+    r = analyze(snap(cluster=c, workers=workers(cpu=90, mem=90, q=3)), cfg())
+    assert "INCOMPLETE_TRANSACTION" in r.diagnostics
+    assert r.recommended_next_workers is None

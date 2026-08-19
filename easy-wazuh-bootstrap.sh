@@ -901,6 +901,76 @@ assert_single_node_container_names() {
   fi
 }
 
+
+write_deployment_metadata() {
+  local METADATA_DIR="$WAZUH_DIR/easy-wazuh"
+  local METADATA_FILE="$METADATA_DIR/deployment.yaml"
+  local TMP_FILE
+  local BASELINE_WORKERS=0
+  local MANAGER_PREFIX="wazuh-manager"
+  local MANAGER_WIDTH=2
+  local MANAGER_SUFFIX="null"
+  local INDEXER_PREFIX="wazuh-indexer"
+  local INDEXER_WIDTH=2
+
+  if [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
+    BASELINE_WORKERS=$((${#WAZUH_MANAGER_NODES[@]} - 1))
+    if [[ "${WAZUH_MANAGER_NODES[0]}" =~ ^(.+[^0-9])([0-9]+)([.](.+))?$ ]]; then
+      MANAGER_PREFIX="${BASH_REMATCH[1]}"
+      MANAGER_WIDTH="${#BASH_REMATCH[2]}"
+      if [ -n "${BASH_REMATCH[4]:-}" ]; then
+        MANAGER_SUFFIX="${BASH_REMATCH[4]}"
+      fi
+    fi
+    if [[ "${WAZUH_INDEXER_NODES[0]}" =~ ^(.+[^0-9])([0-9]+)([.].+)?$ ]]; then
+      INDEXER_PREFIX="${BASH_REMATCH[1]}"
+      INDEXER_WIDTH="${#BASH_REMATCH[2]}"
+    fi
+  fi
+
+  mkdir -p "$METADATA_DIR"
+  chmod 700 "$METADATA_DIR"
+  TMP_FILE="$(mktemp "$METADATA_DIR/deployment.yaml.tmp.XXXXXX")"
+  cat > "$TMP_FILE" <<EOF
+schema_version: 1
+
+deployment:
+  mode: $DEPLOYMENT_STACK_MODE
+  stack_directory: $STACK_DIR
+  compose_file: docker-compose.yml
+  compose_project_name: null
+
+managers:
+  prefix: $MANAGER_PREFIX
+  number_width: $MANAGER_WIDTH
+  internal_dns_suffix: $MANAGER_SUFFIX
+  master_index: 1
+
+baseline:
+  workers: $BASELINE_WORKERS
+
+indexers:
+  prefix: $INDEXER_PREFIX
+  number_width: $INDEXER_WIDTH
+
+dashboard:
+  count: ${#WAZUH_DASHBOARD_NODES[@]}
+  scalable: false
+EOF
+  chmod 600 "$TMP_FILE"
+
+  if [ -f "$METADATA_FILE" ] && ! cmp -s "$TMP_FILE" "$METADATA_FILE"; then
+    echo "Error: Easy-Wazuh deployment metadata already exists and differs:"
+    echo "  $METADATA_FILE"
+    echo "Refusing to overwrite deployment identity silently."
+    rm -f "$TMP_FILE"
+    exit 1
+  fi
+
+  mv "$TMP_FILE" "$METADATA_FILE"
+  echo "Deployment metadata: $METADATA_FILE"
+}
+
 # Docker detection helpers are used before making package changes.
 docker_is_available() {
   command -v docker >/dev/null 2>&1
@@ -1383,6 +1453,9 @@ if [ "$USE_FIXED_CONTAINER_NAMES" = "yes" ]; then
 else
   echo "Fixed container names: disabled, Docker Compose will generate container names"
 fi
+echo ""
+
+write_deployment_metadata
 echo ""
 
 echo "[9/11] Generating Wazuh self-signed certificates..."

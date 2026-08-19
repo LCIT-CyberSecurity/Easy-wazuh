@@ -11,7 +11,8 @@ from pathlib import Path
 import yaml
 
 from ..logging_setup import atomic_write
-from ..models import ClusterState, ScalingError
+from ..models import ClusterState, NamingError, ScalingError
+from ..naming import next_worker_name as policy_next_worker_name, validate_unique_identity
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
 
@@ -31,16 +32,25 @@ class ComposeBackend:
         self.runner = runner
 
     def next_worker_name(self, cluster: ClusterState) -> str:
-        """Return the first unused worker name matching Easy-Wazuh conventions."""
-        suffix = _suffix(cluster.master or "wazuh-manager01.local")
+        """Return the monotonic next worker name from deployment policy."""
         existing = set(cluster.workers) | ({cluster.master} if cluster.master else set())
-        index = 2
-        while True:
-            candidate = f"wazuh-manager{index:02d}{suffix}"
-            if candidate not in existing:
-                validate_service_name(candidate)
+        policy = cluster.naming_policy
+        if policy is not None:
+            try:
+                candidate = policy_next_worker_name(policy, tuple(existing))
+                validate_unique_identity(candidate, existing)
                 return candidate
-            index += 1
+            except NamingError as exc:
+                raise ScalingError(str(exc)) from exc
+        suffix = _suffix(cluster.master or "wazuh-manager01.local")
+        indices = []
+        for name in existing:
+            match = re.search(r"manager([0-9]+)", name)
+            if match:
+                indices.append(int(match.group(1)))
+        candidate = f"wazuh-manager{(max(indices) if indices else 1) + 1:02d}{suffix}"
+        validate_service_name(candidate)
+        return candidate
 
     def generate_override(self, cluster: ClusterState, worker_name: str) -> Path:
         """Write the orchestrator Compose override for one additional worker.
@@ -76,9 +86,23 @@ class ComposeBackend:
         atomic_write(self.override_file, yaml.safe_dump(data, sort_keys=False), mode=0o600)
         return self.override_file
 
+
+    def remove_from_override(self, worker_name: str) -> Path:
+        """Remove a worker from current desired-state override without deleting volumes."""
+        validate_service_name(worker_name)
+        if not self.override_file.exists():
+            return self.override_file
+        data = yaml.safe_load(self.override_file.read_text(encoding="utf-8")) or {}
+        services = data.get("services") if isinstance(data, dict) else None
+        if isinstance(services, dict):
+            services.pop(worker_name, None)
+        # V1 intentionally preserves volumes for removed workers.
+        atomic_write(self.override_file, yaml.safe_dump(data, sort_keys=False), mode=0o600)
+        return self.override_file
+
     def compose_command(self, *args: str) -> list[str]:
         """Build a shell-free docker compose command with base and override files."""
-        return ["docker", "compose", "-f", str(self.compose_file), "-f", str(self.override_file), *args]
+        return ["docker", "compose", "--project-directory", str(self.project_directory), "-f", str(self.compose_file), "-f", str(self.override_file), *args]
 
     def run_compose(self, *args: str) -> subprocess.CompletedProcess[str]:
         """Execute Compose through an injectable runner; never uses shell=True."""
@@ -100,13 +124,18 @@ class NginxConfigManager:
         self.reloader = reloader or (lambda: True)
 
     def render_with_worker(self, worker: str) -> str:
-        """Return NGINX config content with one worker added once."""
+        """Return NGINX config content with one agent-traffic worker added once."""
         validate_service_name(worker)
         content = self.config_path.read_text(encoding="utf-8") if self.config_path.exists() else "upstream wazuh_managers {\n}\n"
         line = f"    server {worker}:1514;"
         if line in content:
             return content
-        return content.replace("upstream wazuh_managers {\n", f"upstream wazuh_managers {{\n{line}\n")
+        lines = content.splitlines()
+        upstream_index = _agent_traffic_upstream_index(lines)
+        if upstream_index is None:
+            raise ScalingError("NGINX agent-traffic upstream not found.")
+        lines.insert(upstream_index + 1, line)
+        return "\n".join(lines) + "\n"
 
     def apply_worker(self, worker: str, backup_dir: Path) -> None:
         """Backup, atomically apply and validate an NGINX worker addition."""
@@ -130,6 +159,42 @@ class NginxConfigManager:
                 shutil.copy2(backup, self.config_path)
             raise ScalingError("NGINX validation failed; previous configuration restored.")
         self.reloader()
+
+
+def derive_worker_config(template_path: Path, target_path: Path, node_name: str, master_name: str) -> Path:
+    """Clone a baseline worker config and patch only worker-specific fields.
+
+    The cluster key is preserved by copying the template content and never being
+    logged or inspected beyond equality-preserving text replacement.
+    """
+    validate_service_name(node_name)
+    content = template_path.read_text(encoding="utf-8")
+    patched = _replace_xml_value(content, "node_name", node_name)
+    patched = _replace_xml_value(patched, "node", master_name, first_only=True)
+    atomic_write(target_path, patched, mode=0o600)
+    return target_path
+
+
+def _replace_xml_value(content: str, tag: str, value: str, *, first_only: bool = False) -> str:
+    pattern = re.compile(rf"(<{tag}>)(.*?)(</{tag}>)", re.DOTALL)
+    count = 1 if first_only else 0
+    if not pattern.search(content):
+        raise ScalingError(f"Wazuh config tag not found: {tag}")
+    return pattern.sub(lambda match: f"{match.group(1)}{value}{match.group(3)}", content, count=count)
+
+
+def _agent_traffic_upstream_index(lines: list[str]) -> int | None:
+    candidates: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        match = re.match(r"\s*upstream\s+([^\s{]+)\s*{", line)
+        if match:
+            candidates.append((index, match.group(1).lower()))
+    for index, name in candidates:
+        if "enroll" in name:
+            continue
+        if "agent" in name or "manager" in name or name == "wazuh_managers":
+            return index
+    return None
 
 
 def _suffix(master: str) -> str:

@@ -13,11 +13,19 @@ DIAGNOSTICS = {
     "HOST_PRESSURE",
     "WORKER_IMBALANCE",
     "INDEXER_PRESSURE",
+    "DASHBOARD_PRESSURE",
     "CLUSTER_DEGRADED",
     "NGINX_DEGRADED",
     "CONFIG_DRIFT",
     "INSUFFICIENT_METRICS",
     "MAX_WORKERS_REACHED",
+    "UNSUPPORTED_DEPLOYMENT_MODE",
+    "UNSUPPORTED_WAZUH_LAYOUT",
+    "POST_SCALE_STABILIZING",
+    "INCOMPLETE_TRANSACTION",
+    "CERTIFICATE_SAFETY_FAILURE",
+    "NAMING_COLLISION",
+    "NAMING_POLICY_AMBIGUOUS",
     "HOST_CAPACITY_UNKNOWN",
 }
 
@@ -36,6 +44,21 @@ def analyze(snapshot: AnalysisInput, cfg: OrchestratorConfig) -> AnalysisResult:
     current = snapshot.cluster.worker_count
     projection = can_host_accept_worker(snapshot.host, snapshot.workers, cfg)
 
+    if snapshot.cluster.mode not in {"single-node", "multi-node"}:
+        diagnostics.append("UNSUPPORTED_DEPLOYMENT_MODE")
+        explanations.append("Deployment mode is not recognized as Easy-Wazuh.")
+    elif snapshot.cluster.mode == "single-node":
+        diagnostics.append("UNSUPPORTED_DEPLOYMENT_MODE")
+        explanations.append("Worker horizontal scaling requires Easy-Wazuh multi-node deployment.")
+    if snapshot.cluster.details.get("unsupported_layout"):
+        diagnostics.append("UNSUPPORTED_WAZUH_LAYOUT")
+        explanations.append("Wazuh layout is not safe to interpret automatically.")
+    if snapshot.cluster.details.get("incomplete_transaction"):
+        diagnostics.append("INCOMPLETE_TRANSACTION")
+        explanations.append("A previous scaling transaction is incomplete and must be reconciled.")
+    if snapshot.cluster.details.get("post_scale_stabilizing"):
+        diagnostics.append("POST_SCALE_STABILIZING")
+        explanations.append("Recent scaling is still in the stabilization window.")
     if snapshot.cluster.config_drift:
         diagnostics.append("CONFIG_DRIFT")
         explanations.append("Compose or frontend configuration drift was detected.")
@@ -48,6 +71,9 @@ def analyze(snapshot: AnalysisInput, cfg: OrchestratorConfig) -> AnalysisResult:
     if snapshot.indexer.healthy is False or _indexer_pressure(snapshot):
         diagnostics.append("INDEXER_PRESSURE")
         explanations.append("Indexer pressure detected; worker scaling is not recommended.")
+    if _dashboard_pressure(snapshot):
+        diagnostics.append("DASHBOARD_PRESSURE")
+        explanations.append("Dashboard pressure detected; review Dashboard resources. V1 never creates Dashboard02.")
     if _host_pressure(snapshot.host, cfg):
         diagnostics.append("HOST_PRESSURE")
         explanations.append("Host CPU, memory, I/O wait or disk safety threshold is exceeded.")
@@ -67,6 +93,11 @@ def analyze(snapshot: AnalysisInput, cfg: OrchestratorConfig) -> AnalysisResult:
         and "HOST_PRESSURE" not in diagnostics
         and "WORKER_IMBALANCE" not in diagnostics
         and "INDEXER_PRESSURE" not in diagnostics
+        and "DASHBOARD_PRESSURE" not in diagnostics
+        and "UNSUPPORTED_DEPLOYMENT_MODE" not in diagnostics
+        and "UNSUPPORTED_WAZUH_LAYOUT" not in diagnostics
+        and "POST_SCALE_STABILIZING" not in diagnostics
+        and "INCOMPLETE_TRANSACTION" not in diagnostics
         and "CLUSTER_DEGRADED" not in diagnostics
         and "NGINX_DEGRADED" not in diagnostics
         and "INSUFFICIENT_METRICS" not in diagnostics
@@ -120,8 +151,8 @@ def can_host_accept_worker(host, workers: tuple[WorkerMetrics, ...], cfg: Orches
         return HostCapacityProjection(False, None, None, None, None, "HOST_CAPACITY_UNKNOWN")
     if any(w.cpu_percent is None or w.memory_percent is None for w in workers):
         return HostCapacityProjection(False, None, None, None, None, "HOST_CAPACITY_UNKNOWN")
-    estimated_cpu_cost = host.cpu_percent / len(workers)
-    estimated_mem_cost = host.memory_percent / len(workers)
+    estimated_cpu_cost = min(median([w.cpu_percent for w in workers if w.cpu_percent is not None]), host.cpu_percent / len(workers))
+    estimated_mem_cost = min(median([w.memory_percent for w in workers if w.memory_percent is not None]), host.memory_percent / len(workers))
     projected_cpu = host.cpu_percent + estimated_cpu_cost * cfg.capacity.new_worker_safety_factor
     projected_mem = host.memory_percent + estimated_mem_cost * cfg.capacity.new_worker_safety_factor
     cpu_reserve = 100 - projected_cpu
@@ -168,6 +199,15 @@ def _indexer_pressure(snapshot: AnalysisInput) -> bool:
     return any(v is not None and v >= 85 for v in (idx.cpu_percent, idx.memory_percent)) or (idx.disk_free_percent is not None and idx.disk_free_percent < 15)
 
 
+def _dashboard_pressure(snapshot: AnalysisInput) -> bool:
+    dashboard = snapshot.dashboard
+    if snapshot.cluster.dashboard is None or dashboard.healthy is False:
+        return True
+    if dashboard.restart_count is not None and dashboard.restart_count >= 3:
+        return True
+    return any(v is not None and v >= 85 for v in (dashboard.cpu_percent, dashboard.memory_percent))
+
+
 def _confidence(snapshot: AnalysisInput) -> str:
     if snapshot.cluster.cluster_healthy is None or not snapshot.workers:
         return "LOW"
@@ -193,6 +233,14 @@ def _recommendation(diagnostics: list[str], current: int, estimated: int | None,
         return "SCALING BLOCKED. Host pressure has priority; do not add workers."
     if "INDEXER_PRESSURE" in diagnostics:
         return "Worker scaling not recommended. Review Wazuh indexer capacity."
+    if "DASHBOARD_PRESSURE" in diagnostics:
+        return "Worker scaling not recommended. Review Dashboard resource allocation."
+    if "UNSUPPORTED_DEPLOYMENT_MODE" in diagnostics or "UNSUPPORTED_WAZUH_LAYOUT" in diagnostics:
+        return "SCALING BLOCKED. Unsupported Easy-Wazuh deployment layout for V1."
+    if "INCOMPLETE_TRANSACTION" in diagnostics:
+        return "SCALING BLOCKED. Reconcile the incomplete transaction before scaling."
+    if "POST_SCALE_STABILIZING" in diagnostics:
+        return "No immediate second scaling recommendation during stabilization window."
     if "WORKER_IMBALANCE" in diagnostics:
         return "Worker scaling not recommended until load balancer and agent distribution are reviewed."
     return "No worker scaling recommended."

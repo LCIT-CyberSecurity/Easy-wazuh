@@ -36,6 +36,10 @@ class ScalingError(Exception):
     """A scaling transaction failed."""
 
 
+class NamingError(Exception):
+    """Deployment naming policy is invalid or ambiguous."""
+
+
 @dataclass(frozen=True)
 class WorkerSettings:
     baseline: int = 1
@@ -59,6 +63,7 @@ class ScalingSettings:
     max_delta_per_operation: int = 1
     allow_scale_up: bool = True
     allow_scale_down: bool = True
+    stabilization_seconds: int = 300
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,7 @@ class LoggingSettings:
 class RuntimeSettings:
     easy_wazuh_root: Path = Path("/opt/wazuh/wazuh-docker")
     orchestrator_root: Path = Path("wazuh-orchestrator")
+    deployment_metadata_path: Path = Path("/opt/wazuh/easy-wazuh/deployment.yaml")
     compose_timeout_seconds: int = 120
     wazuh_api_url: str | None = None
     wazuh_api_username: str | None = None
@@ -120,6 +126,33 @@ class OrchestratorConfig:
     scale_down: ScaleDownSettings = field(default_factory=ScaleDownSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
+
+
+@dataclass(frozen=True)
+class NamingPolicy:
+    """Stable naming identity persisted by the Easy-Wazuh bootstrap."""
+
+    manager_prefix: str = "wazuh-manager"
+    manager_number_width: int = 2
+    manager_internal_dns_suffix: str | None = None
+    manager_master_index: int = 1
+    indexer_prefix: str = "wazuh-indexer"
+    indexer_number_width: int = 2
+
+
+@dataclass(frozen=True)
+class DeploymentMetadata:
+    """Versioned deployment identity created by the Easy-Wazuh bootstrap."""
+
+    schema_version: int
+    mode: str
+    stack_directory: Path
+    compose_file: str
+    compose_project_name: str | None
+    naming: NamingPolicy
+    baseline_workers: int
+    dashboard_count: int
+    dashboard_scalable: bool = False
 
 
 @dataclass(frozen=True)
@@ -169,6 +202,19 @@ class IndexerState:
     disk_free_percent: float | None = None
 
 
+
+
+@dataclass(frozen=True)
+class DashboardState:
+    """Observed state for the single Dashboard supported by V1."""
+
+    name: str | None = None
+    healthy: bool | None = None
+    cpu_percent: float | None = None
+    memory_percent: float | None = None
+    restart_count: int | None = None
+
+
 @dataclass(frozen=True)
 class ClusterState:
     mode: TopologyMode
@@ -180,6 +226,8 @@ class ClusterState:
     compose_file: Path | None
     compose_project_directory: Path | None
     compose_network: str | None
+    deployment_metadata: DeploymentMetadata | None = None
+    naming_policy: NamingPolicy | None = None
     version: str | None = None
     cluster_healthy: bool | None = None
     nginx_healthy: bool | None = None
@@ -199,6 +247,7 @@ class AnalysisInput:
     host: HostMetrics
     workers: tuple[WorkerMetrics, ...]
     indexer: IndexerState = field(default_factory=IndexerState)
+    dashboard: DashboardState = field(default_factory=DashboardState)
 
 
 @dataclass(frozen=True)

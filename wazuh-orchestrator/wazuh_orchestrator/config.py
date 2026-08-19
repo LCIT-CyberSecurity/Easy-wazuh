@@ -72,7 +72,7 @@ def _runtime(data: Any) -> RuntimeSettings:
     if unknown:
         raise ConfigurationError(f"Unknown configuration keys for RuntimeSettings: {', '.join(unknown)}")
     converted = dict(data)
-    for key in ("easy_wazuh_root", "orchestrator_root"):
+    for key in ("easy_wazuh_root", "orchestrator_root", "deployment_metadata_path"):
         if key in converted:
             converted[key] = Path(converted[key])
     return RuntimeSettings(**converted)
@@ -91,6 +91,8 @@ def validate_config(cfg: OrchestratorConfig) -> None:
         raise ConfigurationError("scaling.max_delta_per_operation must be exactly 1 in V1.")
     if cfg.capacity.new_worker_safety_factor < 1:
         raise ConfigurationError("capacity.new_worker_safety_factor must be >= 1.")
+    if cfg.scaling.stabilization_seconds < 0:
+        raise ConfigurationError("scaling.stabilization_seconds must be >= 0.")
     if cfg.scale_down.drain_seconds < 0:
         raise ConfigurationError("scale_down.drain_seconds must be >= 0.")
     if cfg.logging.level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:

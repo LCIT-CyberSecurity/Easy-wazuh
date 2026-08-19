@@ -10,6 +10,7 @@ from .analyzer import analyze, can_host_accept_worker
 from .backends.compose import ComposeBackend, NginxConfigManager, timestamped_backup_dir
 from .logging_setup import write_audit
 from .models import AnalysisInput, AnalysisResult, OrchestratorConfig, SafetyError, ScalingError, ScalingPlan
+from .transactions import TransactionStore
 
 
 def build_plan(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int, backend: ComposeBackend | None = None) -> ScalingPlan:
@@ -56,28 +57,46 @@ def scale(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int,
     with lock_path.open("w", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
+            store = TransactionStore(root)
+            if store.incomplete():
+                raise ScalingError("INCOMPLETE_TRANSACTION. Scaling blocked until reconciliation is complete.")
+            worker = plan.worker_to_create or plan.worker_to_remove
+            manifest = store.create(plan.action, worker)
             backup_dir = timestamped_backup_dir(root)
             if plan.action == "scale_up" and plan.worker_to_create:
                 backend.generate_override(snapshot.cluster, plan.worker_to_create)
+                manifest = store.advance(manifest, "COMPOSE_READY", compose_updated=True)
                 backend.run_compose("up", "-d", plan.worker_to_create)
+                manifest = store.advance(manifest, "WORKER_STARTED", container_started=True)
                 try:
                     if nginx:
                         nginx.apply_worker(plan.worker_to_create, backup_dir)
+                        manifest = store.advance(manifest, "NGINX_UPDATED", nginx_updated=True)
                 except Exception:
+                    manifest = store.advance(manifest, "ROLLBACK")
                     backend.run_compose("stop", plan.worker_to_create)
                     backend.run_compose("rm", "-f", plan.worker_to_create)
                     raise
             elif plan.action == "scale_down" and plan.worker_to_remove:
                 if nginx:
                     nginx.remove_worker(plan.worker_to_remove, backup_dir)
+                    manifest = store.advance(manifest, "NGINX_UPDATED", nginx_updated=True)
                 if sleep:
                     sleep(cfg.scale_down.drain_seconds)
                 backend.run_compose("stop", plan.worker_to_remove)
                 backend.run_compose("rm", "-f", plan.worker_to_remove)
+                if hasattr(backend, "remove_from_override"):
+                    backend.remove_from_override(plan.worker_to_remove)
+                manifest = store.advance(manifest, "COMPOSE_READY", compose_updated=True)
+            store.advance(manifest, "SUCCESS")
             write_audit(root, {"action": plan.action, "workers_before": plan.current_workers, "workers_after": plan.target_workers, "result": "success"})
             return plan
         except Exception as exc:
-            write_audit(root, {"action": plan.action, "workers_before": plan.current_workers, "workers_after": plan.target_workers, "result": "failed"})
+            try:
+                if "manifest" in locals():
+                    TransactionStore(root).advance(manifest, "FAILED")
+            finally:
+                write_audit(root, {"action": plan.action, "workers_before": plan.current_workers, "workers_after": plan.target_workers, "result": "failed"})
             if isinstance(exc, (SafetyError, ScalingError)):
                 raise
             raise ScalingError(str(exc)) from exc
@@ -92,7 +111,11 @@ def _validate_limits(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_wo
     if abs(target_workers - current) > cfg.scaling.max_delta_per_operation:
         raise SafetyError("V1 permits only one worker change per operation.")
     if cfg.safety.require_multi_node_for_scaling and snapshot.cluster.mode != "multi-node":
-        raise SafetyError("Worker horizontal scaling requires a Wazuh multi-node topology. Current deployment: single-node.")
+        raise SafetyError("UNSUPPORTED_DEPLOYMENT_MODE. Worker horizontal scaling requires an Easy-Wazuh multi-node topology.")
+    if snapshot.cluster.details.get("unsupported_layout"):
+        raise SafetyError("UNSUPPORTED_WAZUH_LAYOUT. Scaling blocked.")
+    if snapshot.cluster.details.get("incomplete_transaction"):
+        raise SafetyError("INCOMPLETE_TRANSACTION. Scaling blocked until reconciliation is complete.")
 
 
 def _validate_scale_up(snapshot: AnalysisInput, cfg: OrchestratorConfig, result: AnalysisResult) -> None:
@@ -100,6 +123,10 @@ def _validate_scale_up(snapshot: AnalysisInput, cfg: OrchestratorConfig, result:
         raise SafetyError("scale-up is disabled by configuration.")
     if result.confidence == "LOW":
         raise SafetyError("LOW confidence analysis blocks scaling.")
+    blocked = {"UNSUPPORTED_DEPLOYMENT_MODE", "UNSUPPORTED_WAZUH_LAYOUT", "POST_SCALE_STABILIZING", "INCOMPLETE_TRANSACTION", "DASHBOARD_PRESSURE"}
+    hit = blocked.intersection(result.diagnostics)
+    if hit:
+        raise SafetyError(f"{sorted(hit)[0]}. Scaling blocked.")
     if cfg.safety.require_cluster_healthy and snapshot.cluster.cluster_healthy is not True:
         raise SafetyError("CLUSTER_DEGRADED. Scaling blocked.")
     if cfg.safety.require_nginx_healthy and snapshot.cluster.nginx and snapshot.cluster.nginx_healthy is not True:

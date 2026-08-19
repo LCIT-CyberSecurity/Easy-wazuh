@@ -80,3 +80,17 @@ def test_baseline_worker_never_removed():
 def test_idempotent_target_already_reached():
     plan = build_plan(snapshot(), cfg(), 2)
     assert plan.action == "none"
+
+
+def test_incomplete_transaction_scaling_refused():
+    c = ClusterState("multi-node", "m", ("w1", "w2"), ("i",), "d", "nginx", None, None, "default", cluster_healthy=True, nginx_healthy=True, details={"incomplete_transaction": True})
+    with pytest.raises(SafetyError, match="INCOMPLETE_TRANSACTION"):
+        build_plan(snapshot(c), cfg(), 3)
+
+
+def test_dashboard_pressure_scaling_refused():
+    from wazuh_orchestrator.models import DashboardState
+    s = snapshot()
+    s = AnalysisInput(s.cluster, s.host, s.workers, s.indexer, DashboardState("d", True, 90, 20, 0))
+    with pytest.raises(SafetyError, match="DASHBOARD_PRESSURE"):
+        build_plan(s, cfg(), 3)

@@ -16,6 +16,7 @@ scaling:
   max_delta_per_operation: 1
   allow_scale_up: true
   allow_scale_down: true
+  stabilization_seconds: 300
 
 capacity:
   new_worker_safety_factor: 1.30
@@ -42,3 +43,7 @@ scale_down:
 
 logging:
   level: INFO
+
+runtime:
+  easy_wazuh_root: /opt/wazuh/wazuh-docker
+  deployment_metadata_path: /opt/wazuh/easy-wazuh/deployment.yaml
