@@ -131,28 +131,28 @@ git clone https://github.com/cedricdicesare/Easy-wazuh.git
 cd Easy-wazuh
 ```
 
-It is also possible to copy only the content of `Wazuh-installer.sh` into a new script file on the Debian 13 machine.
+It is also possible to copy only the content of `easy-wazuh-bootstrap.sh` into a new script file on the Debian 13 machine.
 
 ```bash
-nano Wazuh-installer.sh
+nano easy-wazuh-bootstrap.sh
 ```
 
 Make the script executable:
 
 ```bash
-chmod +x Wazuh-installer.sh
+chmod +x easy-wazuh-bootstrap.sh
 ```
 
 Run the installer with sudo:
 
 ```bash
-sudo ./Wazuh-installer.sh
+sudo ./easy-wazuh-bootstrap.sh
 ```
 
 The installer asks for the dashboard FQDN or IP address that clients will use to reach the Wazuh VM. This value is printed at the end as the Wazuh dashboard URL. For repeatable test deployments, you can provide it non-interactively:
 
 ```bash
-sudo WAZUH_PUBLIC_FQDN=wazuh.example.com ./Wazuh-installer.sh
+sudo WAZUH_PUBLIC_FQDN=wazuh.example.com ./easy-wazuh-bootstrap.sh
 ```
 
 This value is used for the dashboard URL shown to users and agents. Internal container-to-container traffic uses the service names selected by the deployment mode.
@@ -166,7 +166,7 @@ VM-Wazuh.local
 You can change that suffix for client deployments:
 
 ```bash
-sudo WAZUH_PUBLIC_DNS_SUFFIX=customer.example ./Wazuh-installer.sh
+sudo WAZUH_PUBLIC_DNS_SUFFIX=customer.example ./easy-wazuh-bootstrap.sh
 ```
 
 At the end of the deployment, the installer prints the detected server FQDN, detected server IP, and the exact dashboard URL to open in the browser.
@@ -200,7 +200,7 @@ The public FQDN or IP address is used for the dashboard access URL and the gener
 For repeatable VM tests, create or update DNS before deployment, or pass the expected name explicitly:
 
 ```bash
-sudo WAZUH_PUBLIC_FQDN=wazuh.lab.example ./Wazuh-installer.sh
+sudo WAZUH_PUBLIC_FQDN=wazuh.lab.example ./easy-wazuh-bootstrap.sh
 ```
 
 DNS requirements:
@@ -229,7 +229,7 @@ wazuh-dashboard01.lab.example
 The suffix can also be provided non-interactively:
 
 ```bash
-sudo WAZUH_INTERNAL_DNS_SUFFIX=lab.example WAZUH_PUBLIC_FQDN=wazuh.lab.example ./Wazuh-installer.sh
+sudo WAZUH_INTERNAL_DNS_SUFFIX=lab.example WAZUH_PUBLIC_FQDN=wazuh.lab.example ./easy-wazuh-bootstrap.sh
 ```
 
 These internal names are Docker service names inside the generated compose stack for this one-host PoC. They do not require public DNS records unless the deployment is redesigned later across multiple VMs.
@@ -270,7 +270,7 @@ If containers with `wazuh` in their name already exist, the script warns the use
 By default, the installer uses Wazuh `v4.14.5`, matching the current official Docker documentation when this project was written. To install another Wazuh Docker tag:
 
 ```bash
-sudo WAZUH_VERSION=v4.14.5 ./Wazuh-installer.sh
+sudo WAZUH_VERSION=v4.14.5 ./easy-wazuh-bootstrap.sh
 ```
 
 ## Updating Docker images without losing data
@@ -701,7 +701,7 @@ For non-interactive deployments, enable the optional realtime FIM configuration
 explicitly:
 
 ```bash
-sudo EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME=yes ./Wazuh-installer.sh
+sudo EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME=yes ./easy-wazuh-bootstrap.sh
 ```
 
 When enabled, the installer backs up `/var/ossec/etc/ossec.conf`, changes the
