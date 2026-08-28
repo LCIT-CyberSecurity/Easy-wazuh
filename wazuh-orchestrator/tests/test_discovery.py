@@ -49,6 +49,20 @@ def test_multiple_master_error(tmp_path):
         discover_from_compose(p)
 
 
+def test_malformed_compose_rejected(tmp_path):
+    p = tmp_path / "docker-compose.yml"
+    p.write_text("services: [", encoding="utf-8")
+    with pytest.raises(DiscoveryError, match="Malformed Compose"):
+        discover_from_compose(p)
+
+
+def test_compose_root_must_be_mapping(tmp_path):
+    p = tmp_path / "docker-compose.yml"
+    p.write_text("- services", encoding="utf-8")
+    with pytest.raises(DiscoveryError, match="root must be a mapping"):
+        discover_from_compose(p)
+
+
 def test_worker_absent_single_node_supported():
     state = discover_from_compose(FIXTURES / "compose_single_node.yml")
     assert state.worker_count == 0

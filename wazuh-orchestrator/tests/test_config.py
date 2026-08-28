@@ -23,6 +23,11 @@ def test_invalid_yaml_root(tmp_path):
         load_config(write_cfg(tmp_path, "- nope\n"))
 
 
+def test_malformed_yaml_rejected(tmp_path):
+    with pytest.raises(ConfigurationError, match="Malformed configuration"):
+        load_config(write_cfg(tmp_path, "workers: ["))
+
+
 def test_baseline_greater_than_max_refused(tmp_path):
     with pytest.raises(ConfigurationError):
         load_config(write_cfg(tmp_path, "workers:\n  baseline: 4\n  max: 3\n"))
@@ -56,3 +61,13 @@ def test_logging_level_valid(tmp_path):
 def test_logging_level_invalid_refused(tmp_path):
     with pytest.raises(ConfigurationError):
         load_config(write_cfg(tmp_path, "logging:\n  level: TRACE\n"))
+
+
+def test_wazuh_api_url_must_be_https(tmp_path):
+    with pytest.raises(ConfigurationError, match="HTTPS"):
+        load_config(write_cfg(tmp_path, "runtime:\n  wazuh_api_url: http://wazuh:55000\n"))
+
+
+def test_wazuh_api_timeout_positive(tmp_path):
+    with pytest.raises(ConfigurationError, match="wazuh_api_timeout"):
+        load_config(write_cfg(tmp_path, "runtime:\n  wazuh_api_timeout_seconds: 0\n"))

@@ -11,14 +11,16 @@ from dataclasses import asdict
 from pathlib import Path
 
 from wazuh_orchestrator.analyzer import analyze
-from wazuh_orchestrator.backends.compose import ComposeBackend
+from wazuh_orchestrator.backends.compose import ComposeBackend, NginxConfigManager
+from wazuh_orchestrator.certificates import PreprovisionedCertificatePreparer
 from wazuh_orchestrator.config import load_config
 from wazuh_orchestrator.discovery import discover_installation
 from wazuh_orchestrator.logging_setup import configure_logging
 from wazuh_orchestrator.metrics import collect_host_metrics
-from wazuh_orchestrator.models import AnalysisInput, ConfigurationError, DiscoveryError, DashboardState, HostMetrics, IndexerState, SafetyError, ScalingError, WorkerMetrics
+from wazuh_orchestrator.models import AnalysisInput, ConfigurationError, DiscoveryError, DashboardState, HostMetrics, IndexerState, SafetyError, ScalingError, WazuhAPIError, WorkerMetrics
 from wazuh_orchestrator.scaler import build_plan, scale
 from wazuh_orchestrator.transactions import TransactionStore
+from wazuh_orchestrator.wazuh_api import WazuhAPIClient, WazuhClusterValidator, cluster_status_healthy
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,9 +43,9 @@ def main(argv: list[str] | None = None) -> int:
         return int(exc.code)
     try:
         cfg = load_config(args.config)
-        root = Path(__file__).resolve().parent
+        root = _runtime_root(cfg)
         configure_logging(root, "DEBUG" if args.debug else cfg.logging.level)
-        snapshot = _snapshot(cfg)
+        snapshot = _with_transaction_details(_snapshot(cfg), root, cfg)
         transaction_state = TransactionStore(root).reconcile_read_only()
         if args.command == "status":
             return _status(snapshot, cfg, args.json, transaction_state)
@@ -60,9 +62,9 @@ def main(argv: list[str] | None = None) -> int:
                 if not _confirm_scale(plan):
                     print("Scaling cancelled.")
                     return 1
-                scale(snapshot, cfg, args.workers, backend, None, root, sleep=time.sleep)
+                scale(snapshot, cfg, args.workers, backend, _nginx_manager(snapshot, backend), root, sleep=time.sleep, certificate_preparer=_certificate_preparer(snapshot, root), cluster_validator=_cluster_validator(cfg))
             return 0
-    except (ConfigurationError, DiscoveryError, SafetyError, ScalingError) as exc:
+    except (ConfigurationError, DiscoveryError, SafetyError, ScalingError, WazuhAPIError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     return 1
@@ -72,9 +74,59 @@ def _snapshot(cfg) -> AnalysisInput:
     cluster = discover_installation(cfg.runtime.easy_wazuh_root, metadata_path=cfg.runtime.deployment_metadata_path)
     if cluster.mode == "unknown" and not cluster.docker_available:
         raise DiscoveryError("Docker runtime not detected.\nNo running Easy-Wazuh installation can be inspected on this host.")
+    cluster = _with_wazuh_cluster_health(cluster, cfg)
     host = collect_host_metrics(cfg.runtime.easy_wazuh_root.parent)
     workers = tuple(WorkerMetrics(name=w, cpu_percent=None, memory_percent=None, baseline_worker=i < cfg.workers.baseline) for i, w in enumerate(cluster.workers))
     return AnalysisInput(cluster=cluster, host=host, workers=workers, indexer=IndexerState(names=cluster.indexers, healthy=cluster.cluster_healthy), dashboard=DashboardState(name=cluster.dashboard))
+
+
+def _with_wazuh_cluster_health(cluster, cfg):
+    if not cfg.runtime.wazuh_api_url:
+        return cluster
+    client = _wazuh_api_client(cfg)
+    healthy = cluster_status_healthy(client.get_cluster_state())
+    return cluster.__class__(**{**cluster.__dict__, "cluster_healthy": healthy})
+
+
+def _with_transaction_details(snapshot: AnalysisInput, root: Path, cfg) -> AnalysisInput:
+    store = TransactionStore(root)
+    state = store.reconcile_read_only()
+    post_scale_stabilizing = bool(
+        store.recent_success("scale_up", cfg.scaling.stabilization_seconds)
+        or store.recent_success("scale_down", cfg.scaling.stabilization_seconds)
+    )
+    details = {
+        **snapshot.cluster.details,
+        "incomplete_transaction": bool(state.get("incomplete_transaction")),
+        "post_scale_stabilizing": post_scale_stabilizing,
+    }
+    cluster = snapshot.cluster.__class__(**{**snapshot.cluster.__dict__, "details": details})
+    return AnalysisInput(cluster, snapshot.host, snapshot.workers, snapshot.indexer, snapshot.dashboard)
+
+
+def _wazuh_api_client(cfg) -> WazuhAPIClient:
+    missing = [
+        name
+        for name, value in (
+            ("runtime.wazuh_api_url", cfg.runtime.wazuh_api_url),
+            ("runtime.wazuh_api_username", cfg.runtime.wazuh_api_username),
+            ("runtime.wazuh_api_password", cfg.runtime.wazuh_api_password),
+        )
+        if not value
+    ]
+    if missing:
+        raise ConfigurationError("Wazuh API configuration is required for scale validation: " + ", ".join(missing))
+    return WazuhAPIClient(
+        cfg.runtime.wazuh_api_url,
+        cfg.runtime.wazuh_api_username,
+        cfg.runtime.wazuh_api_password,
+        verify_tls=cfg.runtime.wazuh_api_verify_tls,
+        timeout=cfg.runtime.wazuh_api_timeout_seconds,
+    )
+
+
+def _cluster_validator(cfg) -> WazuhClusterValidator:
+    return WazuhClusterValidator(_wazuh_api_client(cfg))
 
 
 def _duration_config(cfg, duration: int):
@@ -82,10 +134,40 @@ def _duration_config(cfg, duration: int):
     return cfg.__class__(**{**cfg.__dict__, "analysis": cfg.analysis.__class__(**{**cfg.analysis.__dict__, "sample_count": sample_count})})
 
 
+def _runtime_root(cfg) -> Path:
+    root = cfg.runtime.orchestrator_root
+    if root == Path("wazuh-orchestrator") and not root.is_absolute():
+        return Path(__file__).resolve().parent
+    return root if root.is_absolute() else Path.cwd() / root
+
+
 def _backend(snapshot: AnalysisInput, root: Path, cfg) -> ComposeBackend:
     if not snapshot.cluster.compose_file or not snapshot.cluster.compose_project_directory:
         raise DiscoveryError("No Easy-Wazuh Compose file discovered.")
     return ComposeBackend(snapshot.cluster.compose_file, root / "generated" / "docker-compose.orchestrator.yml", snapshot.cluster.compose_project_directory, cfg.runtime.compose_timeout_seconds)
+
+
+def _nginx_manager(snapshot: AnalysisInput, backend: ComposeBackend) -> NginxConfigManager | None:
+    if not snapshot.cluster.nginx:
+        return None
+    if not snapshot.cluster.compose_project_directory:
+        raise DiscoveryError("No Easy-Wazuh Compose project directory discovered.")
+    nginx_conf = snapshot.cluster.compose_project_directory / "config" / "nginx" / "nginx.conf"
+    if not nginx_conf.exists():
+        raise DiscoveryError(f"Easy-Wazuh NGINX config not found: {nginx_conf}")
+    nginx_service = snapshot.cluster.nginx
+    return NginxConfigManager(
+        nginx_conf,
+        validator=lambda path: backend.validate_nginx_config(nginx_service),
+        reloader=lambda: backend.reload_nginx(nginx_service),
+    )
+
+
+def _certificate_preparer(snapshot: AnalysisInput, root: Path) -> PreprovisionedCertificatePreparer:
+    if not snapshot.cluster.compose_project_directory:
+        raise DiscoveryError("No Easy-Wazuh Compose project directory discovered.")
+    cert_dir = snapshot.cluster.compose_project_directory / "config" / "wazuh_indexer_ssl_certs"
+    return PreprovisionedCertificatePreparer(cert_dir, root)
 
 
 def _status(snapshot: AnalysisInput, cfg, as_json: bool, transaction_state=None) -> int:
@@ -96,6 +178,9 @@ def _status(snapshot: AnalysisInput, cfg, as_json: bool, transaction_state=None)
     print("Easy-Wazuh Orchestrator")
     print("=======================")
     print(f"Deployment       {snapshot.cluster.mode}")
+    print(f"Stack directory  {snapshot.cluster.compose_project_directory or 'UNKNOWN'}")
+    print(f"Compose file     {snapshot.cluster.compose_file or 'UNKNOWN'}")
+    print(f"Compose project  {snapshot.cluster.deployment_metadata.compose_project_name if snapshot.cluster.deployment_metadata else 'UNKNOWN'}")
     print(f"Version          {snapshot.cluster.version or 'UNKNOWN'}")
     print(f"Master           {snapshot.cluster.master or 'UNKNOWN'}")
     print(f"Workers          {snapshot.cluster.worker_count}")

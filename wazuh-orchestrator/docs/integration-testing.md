@@ -1,6 +1,8 @@
 # Integration Testing Checklist
 
-Run these checks only on a prepared Docker/Wazuh integration machine.
+Run these checks only on a prepared Docker/Wazuh integration machine. Local unit tests mock Docker, Wazuh API, NGINX and certificate tooling; passing them does not prove real scale safety.
+
+Automatic incremental certificate generation is intentionally blocked until the certificate behavior below passes on a real Easy-Wazuh stack. Preprovisioned worker certificates can be accepted by the orchestrator, but the real certificate lifecycle must still be validated here.
 
 - [ ] `easy-wazuh-bootstrap.sh` performs existing multi-node bootstrap
 - [ ] deployment metadata created

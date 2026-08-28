@@ -4,13 +4,30 @@ from __future__ import annotations
 
 import fcntl
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from .analyzer import analyze, can_host_accept_worker
 from .backends.compose import ComposeBackend, NginxConfigManager, timestamped_backup_dir
+from .certificates import CertificatePreparer, IntegrationRequiredCertificatePreparer
 from .logging_setup import write_audit
 from .models import AnalysisInput, AnalysisResult, OrchestratorConfig, SafetyError, ScalingError, ScalingPlan
 from .transactions import TransactionStore
+
+
+class ClusterValidator(Protocol):
+    def verify_cluster_join(self, worker_name: str) -> None:
+        ...
+
+    def final_validate_cluster(self) -> None:
+        ...
+
+
+class IntegrationRequiredClusterValidator:
+    def verify_cluster_join(self, worker_name: str) -> None:
+        raise ScalingError("INTEGRATION_VALIDATION_REQUIRED: Wazuh API cluster join validation is required before scale-up execution.")
+
+    def final_validate_cluster(self) -> None:
+        raise ScalingError("INTEGRATION_VALIDATION_REQUIRED: Wazuh API final cluster validation is required before completing scaling.")
 
 
 def build_plan(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int, backend: ComposeBackend | None = None) -> ScalingPlan:
@@ -26,7 +43,7 @@ def build_plan(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers:
     result = analyze(snapshot, cfg)
     if target_workers > current:
         _validate_scale_up(snapshot, cfg, result)
-        worker = backend.next_worker_name(snapshot.cluster) if backend else f"wazuh-manager{target_workers + 1:02d}.local"
+        worker = backend.next_worker_name(snapshot.cluster) if backend else f"wazuh-manager{current + 1:02d}.local"
         files = (Path("wazuh-orchestrator/generated/docker-compose.orchestrator.yml"),)
         return ScalingPlan(current, target_workers, "scale_up", files, worker_to_create=worker, nginx_changes=(f"add {worker} to NGINX pool",), safety_checks=("host capacity", "cluster health", "nginx health"), projection=result.projection)
     removable = _select_removable_worker(snapshot, cfg)
@@ -42,7 +59,18 @@ def build_plan(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers:
     )
 
 
-def scale(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int, backend: ComposeBackend, nginx: NginxConfigManager | None, root: Path, *, sleep: Callable[[int], None] | None = None) -> ScalingPlan:
+def scale(
+    snapshot: AnalysisInput,
+    cfg: OrchestratorConfig,
+    target_workers: int,
+    backend: ComposeBackend,
+    nginx: NginxConfigManager | None,
+    root: Path,
+    *,
+    sleep: Callable[[int], None] | None = None,
+    certificate_preparer: CertificatePreparer | None = None,
+    cluster_validator: ClusterValidator | None = None,
+) -> ScalingPlan:
     """Execute an already-confirmed scaling transaction.
 
     The CLI owns human confirmation. This function owns locking, backups, backend
@@ -55,7 +83,10 @@ def scale(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int,
     lock_path = root / "generated" / "scale.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w", encoding="utf-8") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ScalingError("SCALING_LOCKED. Another scaling operation is already running.") from exc
         try:
             store = TransactionStore(root)
             if store.incomplete():
@@ -63,21 +94,54 @@ def scale(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int,
             worker = plan.worker_to_create or plan.worker_to_remove
             manifest = store.create(plan.action, worker)
             backup_dir = timestamped_backup_dir(root)
+            desired_state_backup = backend.backup_desired_state(backup_dir) if hasattr(backend, "backup_desired_state") else None
             if plan.action == "scale_up" and plan.worker_to_create:
-                backend.generate_override(snapshot.cluster, plan.worker_to_create)
-                manifest = store.advance(manifest, "COMPOSE_READY", compose_updated=True)
-                backend.run_compose("up", "-d", plan.worker_to_create)
-                manifest = store.advance(manifest, "WORKER_STARTED", container_started=True)
+                certs = certificate_preparer or IntegrationRequiredCertificatePreparer()
+                cluster_checks = cluster_validator or IntegrationRequiredClusterValidator()
+                certificate_transaction_id: str | None = None
                 try:
+                    certificate_result = certs.prepare_worker(plan.worker_to_create, manifest.transaction_id)
+                    certificate_transaction_id = str(certificate_result.get("transaction_id") or manifest.transaction_id)
+                    manifest = store.advance(manifest, "CERTIFICATE_READY", certificate_ready=True)
+                    backend.generate_override(snapshot.cluster, plan.worker_to_create)
+                    backend.validate_effective_config()
+                    manifest = store.advance(manifest, "COMPOSE_READY", compose_updated=True)
+                    backend.start_worker(plan.worker_to_create)
+                    manifest = store.advance(manifest, "WORKER_STARTED", container_started=True)
+                    backend.wait_for_worker_health(plan.worker_to_create)
+                    manifest = store.advance(manifest, "WORKER_HEALTHY", worker_healthy=True)
+                    cluster_checks.verify_cluster_join(plan.worker_to_create)
+                    manifest = store.advance(manifest, "CLUSTER_JOINED", cluster_joined=True)
                     if nginx:
                         nginx.apply_worker(plan.worker_to_create, backup_dir)
                         manifest = store.advance(manifest, "NGINX_UPDATED", nginx_updated=True)
-                except Exception:
+                    cluster_checks.final_validate_cluster()
+                    manifest = store.advance(manifest, "VALIDATED", validated=True)
+                except Exception as exc:
                     manifest = store.advance(manifest, "ROLLBACK")
-                    backend.run_compose("stop", plan.worker_to_create)
-                    backend.run_compose("rm", "-f", plan.worker_to_create)
+                    if manifest.flags.get("nginx_updated") and nginx:
+                        try:
+                            if hasattr(nginx, "restore_backup"):
+                                nginx.restore_backup(backup_dir)
+                            else:
+                                nginx.remove_worker(plan.worker_to_create, backup_dir)
+                        except Exception as nginx_cleanup_exc:
+                            raise ScalingError(f"{exc}; NGINX rollback failed: {nginx_cleanup_exc}") from exc
+                    if manifest.flags.get("container_started"):
+                        backend.run_compose("stop", plan.worker_to_create)
+                        backend.run_compose("rm", "-f", plan.worker_to_create)
+                    if hasattr(backend, "restore_desired_state"):
+                        backend.restore_desired_state(desired_state_backup)
+                    if hasattr(backend, "cleanup_worker_config"):
+                        backend.cleanup_worker_config(plan.worker_to_create)
+                    if certificate_transaction_id:
+                        try:
+                            certs.cleanup_worker(certificate_transaction_id)
+                        except Exception as cleanup_exc:
+                            raise ScalingError(f"{exc}; certificate cleanup failed: {cleanup_exc}") from exc
                     raise
             elif plan.action == "scale_down" and plan.worker_to_remove:
+                cluster_checks = cluster_validator or IntegrationRequiredClusterValidator()
                 if nginx:
                     nginx.remove_worker(plan.worker_to_remove, backup_dir)
                     manifest = store.advance(manifest, "NGINX_UPDATED", nginx_updated=True)
@@ -87,7 +151,12 @@ def scale(snapshot: AnalysisInput, cfg: OrchestratorConfig, target_workers: int,
                 backend.run_compose("rm", "-f", plan.worker_to_remove)
                 if hasattr(backend, "remove_from_override"):
                     backend.remove_from_override(plan.worker_to_remove)
+                if hasattr(backend, "cleanup_worker_config"):
+                    backend.cleanup_worker_config(plan.worker_to_remove)
+                backend.validate_effective_config()
                 manifest = store.advance(manifest, "COMPOSE_READY", compose_updated=True)
+                cluster_checks.final_validate_cluster()
+                manifest = store.advance(manifest, "VALIDATED", validated=True)
             store.advance(manifest, "SUCCESS")
             write_audit(root, {"action": plan.action, "workers_before": plan.current_workers, "workers_after": plan.target_workers, "result": "success"})
             return plan

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import fields
 from pathlib import Path
 from typing import Any, get_type_hints
+from urllib.parse import urlparse
 
 import yaml
 
@@ -32,7 +33,10 @@ def load_config(path: Path | None = None) -> OrchestratorConfig:
     if path is not None:
         if not path.exists():
             raise ConfigurationError(f"Configuration file not found: {path}")
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ConfigurationError(f"Malformed configuration file: {path}") from exc
         if raw is None:
             data = {}
         elif isinstance(raw, dict):
@@ -95,6 +99,12 @@ def validate_config(cfg: OrchestratorConfig) -> None:
         raise ConfigurationError("scaling.stabilization_seconds must be >= 0.")
     if cfg.scale_down.drain_seconds < 0:
         raise ConfigurationError("scale_down.drain_seconds must be >= 0.")
+    if cfg.runtime.wazuh_api_timeout_seconds < 1:
+        raise ConfigurationError("runtime.wazuh_api_timeout_seconds must be >= 1.")
+    if cfg.runtime.wazuh_api_url:
+        parsed = urlparse(cfg.runtime.wazuh_api_url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ConfigurationError("runtime.wazuh_api_url must be an HTTPS URL.")
     if cfg.logging.level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ConfigurationError("logging.level must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL.")
     _validate_percentages(cfg)

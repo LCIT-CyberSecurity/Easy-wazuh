@@ -153,15 +153,25 @@ def discover_from_files(root: Path, metadata: DeploymentMetadata | None = None) 
 
 def discover_from_compose(compose_file: Path, metadata: DeploymentMetadata | None = None) -> ClusterState:
     """Parse one Compose file into a ClusterState for tests and offline checks."""
-    data = yaml.safe_load(compose_file.read_text(encoding="utf-8")) or {}
+    data = _load_compose(compose_file)
     services = data.get("services", {})
     mode = metadata.mode if metadata else ("multi-node" if isinstance(services, dict) and ("nginx" in services or any("manager02" in name for name in services)) else "single-node")
     return _discover_compose_data(compose_file, mode, data, metadata)
 
 
 def _discover_compose(compose_file: Path, mode: str, metadata: DeploymentMetadata | None) -> ClusterState:
-    data = yaml.safe_load(compose_file.read_text(encoding="utf-8")) or {}
+    data = _load_compose(compose_file)
     return _discover_compose_data(compose_file, mode, data, metadata)
+
+
+def _load_compose(compose_file: Path) -> dict[str, object]:
+    try:
+        data = yaml.safe_load(compose_file.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise DiscoveryError(f"Malformed Compose file: {compose_file}") from exc
+    if not isinstance(data, dict):
+        raise DiscoveryError("Compose root must be a mapping.")
+    return data
 
 
 def _discover_compose_data(compose_file: Path, mode: str, data: dict[str, object], metadata: DeploymentMetadata | None) -> ClusterState:

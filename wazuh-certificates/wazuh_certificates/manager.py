@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,10 @@ from tempfile import NamedTemporaryFile
 
 class CertificateSafetyError(Exception):
     """Certificate operation would be unsafe or is not validated for V1."""
+
+
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
+SAFE_TRANSACTION_ID = re.compile(r"^cert-[A-Za-z0-9_.-]+$")
 
 
 @dataclass(frozen=True)
@@ -40,10 +45,21 @@ class CertificateManager:
         return {"status": "valid", "ca_fingerprint": fingerprint(ca)}
 
     def prepare_worker(self, node_name: str) -> dict[str, object]:
+        _validate_node_name(node_name)
         before = self._fingerprints()
-        if "root-ca.pem" not in before:
+        existing = self._artifact_names()
+        if "root-ca.pem" not in existing:
             raise CertificateSafetyError("CERTIFICATE_SAFETY_FAILURE: existing Wazuh CA not found")
         tx = CertificateTransaction(f"cert-{uuid.uuid4()}", node_name, ())
+        if all(name in existing for name in self._required_artifacts(node_name)):
+            self._write_manifest(tx, before, before, "ready")
+            return {
+                "status": "ready",
+                "node_name": node_name,
+                "certificate_ready": True,
+                "transaction_id": tx.transaction_id,
+                "created_artifacts": [],
+            }
         self._write_manifest(tx, before, before, "INTEGRATION_VALIDATION_REQUIRED")
         return {
             "status": "INTEGRATION_VALIDATION_REQUIRED",
@@ -57,7 +73,10 @@ class CertificateManager:
         manifest = self._manifest_path(transaction_id)
         if not manifest.exists():
             raise CertificateSafetyError("certificate transaction not found")
-        raw = json.loads(manifest.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CertificateSafetyError("malformed certificate transaction manifest") from exc
         removed = []
         for artifact in raw.get("created_artifacts", []):
             path = Path(artifact)
@@ -69,10 +88,22 @@ class CertificateManager:
     def _fingerprints(self) -> dict[str, str]:
         if not self.cert_dir.exists():
             return {}
-        return {path.name: fingerprint(path) for path in sorted(self.cert_dir.iterdir()) if path.is_file() and path.suffix in {".pem", ".key"}}
+        return {
+            path.name: fingerprint(path)
+            for path in sorted(self.cert_dir.iterdir())
+            if path.is_file() and path.suffix == ".pem" and not path.name.endswith("-key.pem")
+        }
+
+    def _artifact_names(self) -> set[str]:
+        if not self.cert_dir.exists():
+            return set()
+        return {path.name for path in self.cert_dir.iterdir() if path.is_file()}
+
+    def _required_artifacts(self, node_name: str) -> tuple[str, ...]:
+        return ("root-ca.pem", f"{node_name}.pem", f"{node_name}-key.pem")
 
     def _manifest_path(self, transaction_id: str) -> Path:
-        if not transaction_id.startswith("cert-"):
+        if not SAFE_TRANSACTION_ID.fullmatch(transaction_id) or ".." in transaction_id:
             raise CertificateSafetyError("invalid certificate transaction id")
         return self.transactions / f"{transaction_id}.json"
 
@@ -104,3 +135,8 @@ def atomic_write(path: Path, content: str) -> None:
         tmp_path = Path(tmp.name)
     tmp_path.chmod(0o600)
     tmp_path.replace(path)
+
+
+def _validate_node_name(node_name: str) -> None:
+    if not SAFE_NAME.fullmatch(node_name) or ".." in node_name:
+        raise CertificateSafetyError(f"Unsafe certificate node name: {node_name}")

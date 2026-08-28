@@ -31,6 +31,16 @@ def test_ca_fingerprint_before_after_unchanged(tmp_path):
     assert result["status"] == "INTEGRATION_VALIDATION_REQUIRED"
 
 
+def test_preprovisioned_worker_certificate_ready(tmp_path):
+    certs = cert_dir(tmp_path)
+    (certs / "wazuh-manager03.local.pem").write_text("CERT", encoding="utf-8")
+    (certs / "wazuh-manager03.local-key.pem").write_text("PRIVATE KEY", encoding="utf-8")
+    manager = CertificateManager(certs, tmp_path)
+    result = manager.prepare_worker("wazuh-manager03.local")
+    assert result["status"] == "ready"
+    assert result["certificate_ready"] is True
+
+
 def test_existing_certs_not_overwritten(tmp_path):
     certs = cert_dir(tmp_path)
     manager = CertificateManager(certs, tmp_path)
@@ -63,6 +73,22 @@ def test_cleanup_by_transaction_id_only(tmp_path):
         manager.cleanup_worker("manager03")
 
 
+def test_unsafe_worker_name_rejected(tmp_path):
+    certs = cert_dir(tmp_path)
+    with pytest.raises(CertificateSafetyError):
+        CertificateManager(certs, tmp_path).prepare_worker("../wazuh-manager03.local")
+
+
+def test_cleanup_rejects_malformed_manifest(tmp_path):
+    certs = cert_dir(tmp_path)
+    tx_dir = tmp_path / "generated" / "certificate-transactions"
+    tx_dir.mkdir(parents=True)
+    (tx_dir / "cert-bad.json").write_text("{bad", encoding="utf-8")
+
+    with pytest.raises(CertificateSafetyError, match="malformed certificate transaction manifest"):
+        CertificateManager(certs, tmp_path).cleanup_worker("cert-bad")
+
+
 def test_certificate_manifest_has_no_secret(tmp_path):
     certs = cert_dir(tmp_path)
     manager = CertificateManager(certs, tmp_path)
@@ -71,3 +97,4 @@ def test_certificate_manifest_has_no_secret(tmp_path):
     raw = manifest.read_text(encoding="utf-8")
     assert "SecretPassword" not in raw
     assert "PRIVATE KEY" not in raw
+    assert "-key.pem" not in raw

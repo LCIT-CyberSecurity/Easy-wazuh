@@ -46,4 +46,11 @@ logging:
 
 runtime:
   easy_wazuh_root: /opt/wazuh/wazuh-docker
+  orchestrator_root: wazuh-orchestrator
   deployment_metadata_path: /opt/wazuh/easy-wazuh/deployment.yaml
+  # Required for real scale validation. Leave null for read-only offline planning.
+  wazuh_api_url: null
+  wazuh_api_username: null
+  wazuh_api_password: null
+  wazuh_api_verify_tls: true
+  wazuh_api_timeout_seconds: 10

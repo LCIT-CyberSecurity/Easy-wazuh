@@ -32,13 +32,13 @@ python3 wazuh-orchestrator.py scale --workers 3
 
 `status` and `analyze` support `--json`. Use global `--debug` to force DEBUG logs for one run; otherwise configure `logging.level` in YAML.
 
-`scale` is manual and interactive. It prints the plan and requires typing `SCALE`. There is no `--yes` and no `--force` in V1.
+`scale` is manual and interactive. It prints the plan and requires typing `SCALE`. There is no `--yes` and no `--force` in V1. Real scale execution requires Wazuh API settings and preprovisioned worker certificate artifacts; otherwise it fails closed before changing infrastructure.
 
 ## Configuration
 
 Copy `config/orchestrator.yaml.example` and adjust thresholds. Defaults are Easy-Wazuh conservative guardrails, not official universal Wazuh sizing recommendations.
 
-The bootstrap persists deployment identity at `/opt/wazuh/easy-wazuh/deployment.yaml`. The orchestrator reads and validates this file, then compares it with actual Compose state. Important drift blocks scaling.
+The bootstrap persists deployment identity at `/opt/wazuh/easy-wazuh/deployment.yaml`. The orchestrator reads and validates this file, then compares it with actual Compose state. Important drift blocks scaling. Wazuh API credentials are used only for cluster health and join validation and are never printed in CLI output or audit logs.
 
 ## Local Development
 
@@ -59,4 +59,4 @@ Use the existing project virtualenv when the system Python has no pytest install
 
 The orchestrator fails closed. It does not add a worker when topology, naming, metrics, host capacity, cluster health, NGINX health, certificates or transaction state are uncertain.
 
-Real Docker/Wazuh deployment validation remains required; see `docs/integration-testing.md`.
+Real Docker/Wazuh/NGINX/certificate behavior still requires validation on a prepared integration host; see `docs/integration-testing.md`. Do not claim host-level high availability for a single Docker host deployment.

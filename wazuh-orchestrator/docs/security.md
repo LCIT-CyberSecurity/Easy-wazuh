@@ -16,6 +16,9 @@ Protections implemented in V1:
 - transaction manifests without secrets
 - certificate helper does not regenerate, overwrite or delete CA/baseline certs
 - cleanup uses transaction manifests, never name heuristics
+- scale-up rollback restores previous desired-state override when possible
+- NGINX reload failure restores the previous config
+- Wazuh API validation uses HTTPS-only configured URLs
 
 Mounting `/var/run/docker.sock` into a future containerized run gives high privilege over the Docker host. Treat it as administrative access.
 
