@@ -6,21 +6,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from dataclasses import asdict
 from pathlib import Path
 
 from wazuh_orchestrator.analyzer import analyze
-from wazuh_orchestrator.backends.compose import ComposeBackend, NginxConfigManager
-from wazuh_orchestrator.certificates import PreprovisionedCertificatePreparer
+from wazuh_orchestrator.backends.compose import ComposeBackend
 from wazuh_orchestrator.config import load_config
 from wazuh_orchestrator.discovery import discover_installation
 from wazuh_orchestrator.logging_setup import configure_logging
 from wazuh_orchestrator.metrics import collect_host_metrics
 from wazuh_orchestrator.models import AnalysisInput, ConfigurationError, DiscoveryError, DashboardState, HostMetrics, IndexerState, SafetyError, ScalingError, WazuhAPIError, WorkerMetrics
-from wazuh_orchestrator.scaler import build_plan, scale
+from wazuh_orchestrator.scaler import build_plan
 from wazuh_orchestrator.transactions import TransactionStore
-from wazuh_orchestrator.wazuh_api import WazuhAPIClient, WazuhClusterValidator, cluster_status_healthy
+from wazuh_orchestrator.wazuh_api import WazuhAPIClient, cluster_status_healthy
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,10 +57,8 @@ def main(argv: list[str] | None = None) -> int:
             plan = build_plan(snapshot, cfg, args.workers, backend)
             print_plan(plan)
             if args.command == "scale":
-                if not _confirm_scale(plan):
-                    print("Scaling cancelled.")
-                    return 1
-                scale(snapshot, cfg, args.workers, backend, _nginx_manager(snapshot, backend), root, sleep=time.sleep, certificate_preparer=_certificate_preparer(snapshot, root), cluster_validator=_cluster_validator(cfg))
+                print("Scaling execution is disabled in the beta orchestrator. Use this as a manual monitoring check only.", file=sys.stderr)
+                return 2
             return 0
     except (ConfigurationError, DiscoveryError, SafetyError, ScalingError, WazuhAPIError) as exc:
         print(str(exc), file=sys.stderr)
@@ -125,10 +121,6 @@ def _wazuh_api_client(cfg) -> WazuhAPIClient:
     )
 
 
-def _cluster_validator(cfg) -> WazuhClusterValidator:
-    return WazuhClusterValidator(_wazuh_api_client(cfg))
-
-
 def _duration_config(cfg, duration: int):
     sample_count = max(1, duration // max(1, cfg.analysis.sample_interval_seconds))
     return cfg.__class__(**{**cfg.__dict__, "analysis": cfg.analysis.__class__(**{**cfg.analysis.__dict__, "sample_count": sample_count})})
@@ -145,29 +137,6 @@ def _backend(snapshot: AnalysisInput, root: Path, cfg) -> ComposeBackend:
     if not snapshot.cluster.compose_file or not snapshot.cluster.compose_project_directory:
         raise DiscoveryError("No Easy-Wazuh Compose file discovered.")
     return ComposeBackend(snapshot.cluster.compose_file, root / "generated" / "docker-compose.orchestrator.yml", snapshot.cluster.compose_project_directory, cfg.runtime.compose_timeout_seconds)
-
-
-def _nginx_manager(snapshot: AnalysisInput, backend: ComposeBackend) -> NginxConfigManager | None:
-    if not snapshot.cluster.nginx:
-        return None
-    if not snapshot.cluster.compose_project_directory:
-        raise DiscoveryError("No Easy-Wazuh Compose project directory discovered.")
-    nginx_conf = snapshot.cluster.compose_project_directory / "config" / "nginx" / "nginx.conf"
-    if not nginx_conf.exists():
-        raise DiscoveryError(f"Easy-Wazuh NGINX config not found: {nginx_conf}")
-    nginx_service = snapshot.cluster.nginx
-    return NginxConfigManager(
-        nginx_conf,
-        validator=lambda path: backend.validate_nginx_config(nginx_service),
-        reloader=lambda: backend.reload_nginx(nginx_service),
-    )
-
-
-def _certificate_preparer(snapshot: AnalysisInput, root: Path) -> PreprovisionedCertificatePreparer:
-    if not snapshot.cluster.compose_project_directory:
-        raise DiscoveryError("No Easy-Wazuh Compose project directory discovered.")
-    cert_dir = snapshot.cluster.compose_project_directory / "config" / "wazuh_indexer_ssl_certs"
-    return PreprovisionedCertificatePreparer(cert_dir, root)
 
 
 def _status(snapshot: AnalysisInput, cfg, as_json: bool, transaction_state=None) -> int:
@@ -223,15 +192,6 @@ def _print_analysis(snapshot: AnalysisInput, cfg, result, as_json: bool) -> int:
     return 0
 
 
-def _confirm_scale(plan) -> bool:
-    """Require an explicit human confirmation before any scale transaction."""
-    if plan.action == "none":
-        return True
-    print("")
-    print("Type SCALE to apply this change. Any other input cancels the operation.")
-    return input("Confirmation: ").strip() == "SCALE"
-
-
 def print_plan(plan) -> None:
     if plan.no_change_reason:
         print(plan.no_change_reason)
@@ -240,13 +200,13 @@ def print_plan(plan) -> None:
     print(f"Target workers:  {plan.target_workers}")
     print(f"Action:          {plan.action}")
     for path in plan.files_to_generate:
-        print(f"Generate:        {path}")
+        print(f"Would generate:  {path}")
     if plan.worker_to_create:
-        print(f"Create worker:   {plan.worker_to_create}")
+        print(f"Would create:    {plan.worker_to_create}")
     if plan.worker_to_remove:
-        print(f"Remove worker:   {plan.worker_to_remove}")
+        print(f"Would remove:    {plan.worker_to_remove}")
     for change in plan.nginx_changes:
-        print(f"NGINX:           {change}")
+        print(f"Would update:    {change}")
     for risk in plan.risks:
         print(f"Risk:            {risk}")
 

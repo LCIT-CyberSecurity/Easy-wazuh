@@ -101,14 +101,6 @@ def test_runtime_root_default_is_script_directory():
     assert cli._runtime_root(cli.load_config()) == CLI_PATH.parent
 
 
-class ClusterValidator:
-    def verify_cluster_join(self, worker):
-        return None
-
-    def final_validate_cluster(self):
-        return None
-
-
 class Backend:
     def __init__(self):
         self.commands = []
@@ -140,75 +132,49 @@ class Backend:
         return True
 
 
-def test_cli_scale_cancelled_without_exact_confirmation(monkeypatch, capsys):
+def test_cli_scale_is_monitoring_only(monkeypatch, capsys):
     cli = load_cli()
     backend = Backend()
     monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
     monkeypatch.setattr(cli, "_backend", lambda snapshot, root, cfg: backend)
-    monkeypatch.setattr("builtins.input", lambda prompt: "no")
-    assert cli.main(["scale", "--workers", "3"]) == 1
+
+    assert cli.main(["scale", "--workers", "3"]) == 2
+
+    captured = capsys.readouterr()
+    assert "Action:          scale_up" in captured.out
+    assert "Scaling execution is disabled in the beta orchestrator" in captured.err
     assert backend.commands == []
-    assert "Scaling cancelled." in capsys.readouterr().out
+
+
+def test_cli_scale_does_not_prompt_for_confirmation(monkeypatch):
+    cli = load_cli()
+    backend = Backend()
+    monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
+    monkeypatch.setattr(cli, "_backend", lambda snapshot, root, cfg: backend)
+
+    def fail_input(prompt):
+        raise AssertionError("scale must not prompt in beta monitoring mode")
+
+    monkeypatch.setattr("builtins.input", fail_input)
+
+    assert cli.main(["scale", "--workers", "3"]) == 2
+    assert backend.commands == []
+
+
+def test_cli_scale_does_not_call_live_scaling_dependencies(monkeypatch):
+    cli = load_cli()
+    backend = Backend()
+    monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
+    monkeypatch.setattr(cli, "_backend", lambda snapshot, root, cfg: backend)
+
+    assert not hasattr(cli, "scale")
+    assert not hasattr(cli, "_nginx_manager")
+    assert not hasattr(cli, "_certificate_preparer")
+    assert cli.main(["scale", "--workers", "3"]) == 2
+    assert backend.commands == []
 
 
 def test_cli_scale_requires_no_yes_flag(monkeypatch):
     cli = load_cli()
     monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
     assert cli.main(["scale", "--workers", "3", "--" + "yes"]) == 2
-
-
-def test_cli_scale_up_fails_closed_without_validated_certificates(monkeypatch, capsys):
-    cli = load_cli()
-    backend = Backend()
-    monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
-    monkeypatch.setattr(cli, "_backend", lambda snapshot, root, cfg: backend)
-    monkeypatch.setattr(cli, "_cluster_validator", lambda cfg: ClusterValidator())
-    monkeypatch.setattr(cli, "_nginx_manager", lambda snapshot, backend: None)
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr("builtins.input", lambda prompt: "SCALE")
-    assert cli.main(["scale", "--workers", "3"]) == 2
-    captured = capsys.readouterr()
-    assert "CERTIFICATE_SAFETY_FAILURE" in captured.err
-    assert backend.commands == []
-
-
-def test_cli_scale_requires_wazuh_api_configuration_after_certificates(monkeypatch, tmp_path, capsys):
-    cli = load_cli()
-    backend = Backend()
-    certs = tmp_path / "config" / "wazuh_indexer_ssl_certs"
-    certs.mkdir(parents=True)
-    nginx_conf = tmp_path / "config" / "nginx" / "nginx.conf"
-    nginx_conf.parent.mkdir(parents=True)
-    nginx_conf.write_text("upstream wazuh_managers {\n}\n", encoding="utf-8")
-    for name in ("root-ca.pem", "wazuh-manager04.local.pem", "wazuh-manager04.local-key.pem"):
-        (certs / name).write_text("CERT", encoding="utf-8")
-    snap = snapshot()
-    snap = AnalysisInput(snap.cluster.__class__(**{**snap.cluster.__dict__, "compose_project_directory": tmp_path}), snap.host, snap.workers, snap.indexer, snap.dashboard)
-    monkeypatch.setattr(cli, "_snapshot", lambda cfg: snap)
-    monkeypatch.setattr(cli, "_backend", lambda snapshot, root, cfg: backend)
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr("builtins.input", lambda prompt: "SCALE")
-    assert cli.main(["scale", "--workers", "3"]) == 2
-    assert "Wazuh API configuration is required" in capsys.readouterr().err
-    assert ("up", "-d", "wazuh-manager04.local") not in backend.commands
-
-
-def test_cli_scale_uses_configured_cluster_validator(monkeypatch, tmp_path):
-    cli = load_cli()
-    backend = Backend()
-    certs = tmp_path / "config" / "wazuh_indexer_ssl_certs"
-    certs.mkdir(parents=True)
-    nginx_conf = tmp_path / "config" / "nginx" / "nginx.conf"
-    nginx_conf.parent.mkdir(parents=True)
-    nginx_conf.write_text("upstream wazuh_managers {\n}\n", encoding="utf-8")
-    for name in ("root-ca.pem", "wazuh-manager04.local.pem", "wazuh-manager04.local-key.pem"):
-        (certs / name).write_text("CERT", encoding="utf-8")
-    snap = snapshot()
-    snap = AnalysisInput(snap.cluster.__class__(**{**snap.cluster.__dict__, "compose_project_directory": tmp_path}), snap.host, snap.workers, snap.indexer, snap.dashboard)
-    monkeypatch.setattr(cli, "_snapshot", lambda cfg: snap)
-    monkeypatch.setattr(cli, "_backend", lambda snapshot, root, cfg: backend)
-    monkeypatch.setattr(cli, "_cluster_validator", lambda cfg: ClusterValidator())
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr("builtins.input", lambda prompt: "SCALE")
-    assert cli.main(["scale", "--workers", "3"]) == 0
-    assert ("up", "-d", "wazuh-manager04.local") in backend.commands

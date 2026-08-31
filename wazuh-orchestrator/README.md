@@ -1,12 +1,12 @@
 # Easy-Wazuh Orchestrator
 
-Manual V1 orchestrator for Easy-Wazuh multi-node deployments. It analyzes capacity and prepares controlled horizontal scaling of Wazuh Manager workers only.
+Beta manual monitoring tool for Easy-Wazuh multi-node deployments. It analyzes capacity and builds read-only worker scaling plans, but it does not modify the live deployment.
 
 Supported in V1:
 
 - Easy-Wazuh multi-node deployments recognized from `deployment.yaml` or conservative legacy discovery
 - exactly one Wazuh Manager master
-- N Wazuh Manager workers, bounded by baseline and max
+- N Wazuh Manager workers, monitored against baseline and max
 - exactly one Wazuh Dashboard, monitored only
 - Wazuh Indexers monitored only
 - existing Easy-Wazuh NGINX/load balancer only
@@ -14,6 +14,7 @@ Supported in V1:
 Not supported in V1:
 
 - autoscaling
+- live worker scaling from the CLI
 - single-node orchestration or migration to multi-node
 - multi-host orchestration
 - Dashboard horizontal scaling
@@ -27,12 +28,13 @@ python3 wazuh-orchestrator.py status
 python3 wazuh-orchestrator.py analyze
 python3 wazuh-orchestrator.py analyze --duration 120
 python3 wazuh-orchestrator.py plan --workers 3
-python3 wazuh-orchestrator.py scale --workers 3
+# Disabled in beta monitoring mode:
+# python3 wazuh-orchestrator.py scale --workers 3
 ```
 
 `status` and `analyze` support `--json`. Use global `--debug` to force DEBUG logs for one run; otherwise configure `logging.level` in YAML.
 
-`scale` is manual and interactive. It prints the plan and requires typing `SCALE`. There is no `--yes` and no `--force` in V1. Real scale execution requires Wazuh API settings and preprovisioned worker certificate artifacts; otherwise it fails closed before changing infrastructure.
+`plan` is the manual read-only check for a possible worker count change. In beta monitoring mode, `scale` is intentionally disabled: it prints the same plan context, exits with an error, and does not prompt for confirmation or modify Docker, NGINX, certificates, transactions, or live infrastructure.
 
 ## Configuration
 
@@ -57,6 +59,6 @@ Use the existing project virtualenv when the system Python has no pytest install
 
 ## Safety
 
-The orchestrator fails closed. It does not add a worker when topology, naming, metrics, host capacity, cluster health, NGINX health, certificates or transaction state are uncertain.
+The orchestrator fails closed. In beta monitoring mode, the CLI does not add or remove workers at all; it only reports status, analysis and read-only plans. The lower-level scaling transaction code remains guarded by topology, naming, metrics, host capacity, cluster health, NGINX health, certificates and transaction state checks for future validation.
 
 Real Docker/Wazuh/NGINX/certificate behavior still requires validation on a prepared integration host; see `docs/integration-testing.md`. Do not claim host-level high availability for a single Docker host deployment.
