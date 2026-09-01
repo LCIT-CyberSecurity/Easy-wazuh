@@ -12,7 +12,7 @@ BOOTSTRAP = ROOT / "easy-wazuh-bootstrap.sh"
 def bootstrap_functions() -> str:
     text = BOOTSTRAP.read_text(encoding="utf-8")
     start = text.index("is_valid_ipv4()")
-    end = text.index("prompt_component_hostname()")
+    end = text.index("print_wazuh_connection_summary()")
     return text[start:end]
 
 
@@ -57,3 +57,8 @@ def test_public_prompt_continues_when_default_fqdn_does_not_resolve():
     output = run_bash('WAZUH_PUBLIC_DNS_SUFFIX=""; WAZUH_INTERNAL_DNS_SUFFIX="not-resolving.invalid"; WAZUH_PUBLIC_FQDN=""; prompt_public_endpoint "VM-Openvas.home.lan" "192.168.1.28" <<< ""; printf "%s" "$PUBLIC_ENDPOINT"')
 
     assert output == "wazuh.not-resolving.invalid"
+
+def test_public_endpoint_resolution_continues_when_fqdn_does_not_resolve():
+    output = run_bash('check_public_endpoint_resolution "wazuh.not-resolving.invalid" "192.168.1.28"')
+
+    assert "does not currently resolve" in output

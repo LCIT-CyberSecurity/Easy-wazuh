@@ -513,7 +513,7 @@ check_public_endpoint_resolution() {
     return 0
   fi
 
-  RESOLVED_IP="$(resolve_first_ipv4 "$ENDPOINT")"
+  RESOLVED_IP="$(resolve_first_ipv4 "$ENDPOINT" || true)"
 
   if [ -z "$RESOLVED_IP" ]; then
     echo "Warning: $ENDPOINT does not currently resolve to an IPv4 address."
