@@ -164,15 +164,10 @@ default_dashboard_fqdn() {
   local DETECTED_FQDN="$1"
   local DNS_SUFFIX
 
-  if is_valid_fqdn "$DETECTED_FQDN"; then
-    echo "$DETECTED_FQDN"
-    return 0
-  fi
-
   DNS_SUFFIX="${WAZUH_PUBLIC_DNS_SUFFIX:-${WAZUH_INTERNAL_DNS_SUFFIX:-local}}"
 
-  if is_valid_dns_label "$DETECTED_FQDN" && is_valid_dns_suffix "$DNS_SUFFIX"; then
-    echo "$DETECTED_FQDN.$DNS_SUFFIX"
+  if is_valid_dns_suffix "$DNS_SUFFIX"; then
+    echo "wazuh.$DNS_SUFFIX"
     return 0
   fi
 
