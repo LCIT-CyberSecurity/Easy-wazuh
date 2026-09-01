@@ -38,3 +38,16 @@ def test_bootstrap_does_not_modify_dns_or_hosts_files():
 
     assert "/etc/hosts" not in text
     assert "resolv.conf" not in text
+
+
+def test_bootstrap_checks_host_resources_before_package_work():
+    text = bootstrap_text()
+
+    assert "check_host_resources" in text
+    assert 'EASY_WAZUH_MIN_VCPU="${EASY_WAZUH_MIN_VCPU:-4}"' in text
+    assert 'EASY_WAZUH_MIN_MEMORY_GB_SINGLE_NODE="${EASY_WAZUH_MIN_MEMORY_GB_SINGLE_NODE:-8}"' in text
+    assert 'EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE="${EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE:-16}"' in text
+    assert 'EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE="${EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE:-50}"' in text
+    assert 'EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE="${EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE:-100}"' in text
+    assert "EASY_WAZUH_SKIP_RESOURCE_CHECK=yes" in text
+    assert text.index('check_host_resources "$WAZUH_DIR"') < text.index("apt update")

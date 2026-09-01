@@ -37,6 +37,14 @@ WAZUH_INDEXER_HOSTNAME="${WAZUH_INDEXER_HOSTNAME:-}"
 WAZUH_MANAGER_HOSTNAME="${WAZUH_MANAGER_HOSTNAME:-}"
 WAZUH_DASHBOARD_HOSTNAME="${WAZUH_DASHBOARD_HOSTNAME:-}"
 EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME="${EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME:-}"
+EASY_WAZUH_SKIP_RESOURCE_CHECK="${EASY_WAZUH_SKIP_RESOURCE_CHECK:-no}"
+EASY_WAZUH_MIN_VCPU="${EASY_WAZUH_MIN_VCPU:-4}"
+EASY_WAZUH_MIN_MEMORY_GB="${EASY_WAZUH_MIN_MEMORY_GB:-}"
+EASY_WAZUH_MIN_MEMORY_GB_SINGLE_NODE="${EASY_WAZUH_MIN_MEMORY_GB_SINGLE_NODE:-8}"
+EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE="${EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE:-16}"
+EASY_WAZUH_MIN_DISK_FREE_GB="${EASY_WAZUH_MIN_DISK_FREE_GB:-}"
+EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE="${EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE:-50}"
+EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE="${EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE:-100}"
 DEPLOYMENT_TOPOLOGY=""
 DEPLOYMENT_TOPOLOGY_LABEL=""
 DEPLOYMENT_STACK_MODE=""
@@ -69,6 +77,34 @@ if [ -n "$EASY_WAZUH_ENABLE_LOCAL_AGENT_FIM_REALTIME" ]; then
       ;;
   esac
 fi
+
+case "$EASY_WAZUH_SKIP_RESOURCE_CHECK" in
+  yes|no)
+    ;;
+  *)
+    echo "Error: invalid EASY_WAZUH_SKIP_RESOURCE_CHECK value: $EASY_WAZUH_SKIP_RESOURCE_CHECK"
+    echo "Expected value: yes or no"
+    exit 1
+    ;;
+esac
+
+for RESOURCE_SETTING in EASY_WAZUH_MIN_VCPU EASY_WAZUH_MIN_MEMORY_GB_SINGLE_NODE EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE; do
+  RESOURCE_VALUE="${!RESOURCE_SETTING}"
+  if [[ ! "$RESOURCE_VALUE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: invalid $RESOURCE_SETTING value: $RESOURCE_VALUE"
+    echo "Expected a positive integer."
+    exit 1
+  fi
+done
+
+for OPTIONAL_RESOURCE_SETTING in EASY_WAZUH_MIN_MEMORY_GB EASY_WAZUH_MIN_DISK_FREE_GB; do
+  OPTIONAL_RESOURCE_VALUE="${!OPTIONAL_RESOURCE_SETTING}"
+  if [ -n "$OPTIONAL_RESOURCE_VALUE" ] && [[ ! "$OPTIONAL_RESOURCE_VALUE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: invalid $OPTIONAL_RESOURCE_SETTING value: $OPTIONAL_RESOURCE_VALUE"
+    echo "Expected a positive integer."
+    exit 1
+  fi
+done
 
 # Keep public names narrow because they are written into TLS certificate
 # configuration and later shown to users as connection endpoints.
@@ -1155,6 +1191,101 @@ check_wazuh_port_availability() {
   fi
 }
 
+detect_vcpu_count() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+    return 0
+  fi
+
+  getconf _NPROCESSORS_ONLN 2>/dev/null || echo "0"
+}
+
+detect_memory_total_gb() {
+  awk '/^MemTotal:/ {print int(($2 + 1048576 - 1) / 1048576)}' /proc/meminfo 2>/dev/null || echo "0"
+}
+
+existing_parent_path() {
+  local TARGET="$1"
+
+  while [ ! -e "$TARGET" ] && [ "$TARGET" != "/" ]; do
+    TARGET="$(dirname "$TARGET")"
+  done
+
+  echo "$TARGET"
+}
+
+detect_disk_free_gb() {
+  local TARGET
+
+  TARGET="$(existing_parent_path "$1")"
+  df -Pk "$TARGET" 2>/dev/null | awk 'NR == 2 {print int(($4 + 1048576 - 1) / 1048576)}' || echo "0"
+}
+
+check_host_resources() {
+  local INSTALL_PATH="$1"
+  local VCPU
+  local MEMORY_GB
+  local DISK_FREE_GB
+  local REQUIRED_MEMORY_GB
+  local REQUIRED_DISK_FREE_GB
+  local FAILURES=()
+
+  if [ "$EASY_WAZUH_SKIP_RESOURCE_CHECK" = "yes" ]; then
+    echo "Warning: host resource preflight was skipped by EASY_WAZUH_SKIP_RESOURCE_CHECK=yes."
+    echo "Only use this override for lab troubleshooting."
+    return 0
+  fi
+
+  VCPU="$(detect_vcpu_count)"
+  MEMORY_GB="$(detect_memory_total_gb)"
+  DISK_FREE_GB="$(detect_disk_free_gb "$INSTALL_PATH")"
+
+  if [ -n "$EASY_WAZUH_MIN_MEMORY_GB" ]; then
+    REQUIRED_MEMORY_GB="$EASY_WAZUH_MIN_MEMORY_GB"
+  elif [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
+    REQUIRED_MEMORY_GB="$EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE"
+  else
+    REQUIRED_MEMORY_GB="$EASY_WAZUH_MIN_MEMORY_GB_SINGLE_NODE"
+  fi
+
+  if [ -n "$EASY_WAZUH_MIN_DISK_FREE_GB" ]; then
+    REQUIRED_DISK_FREE_GB="$EASY_WAZUH_MIN_DISK_FREE_GB"
+  elif [ "$DEPLOYMENT_STACK_MODE" = "multi-node" ]; then
+    REQUIRED_DISK_FREE_GB="$EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE"
+  else
+    REQUIRED_DISK_FREE_GB="$EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE"
+  fi
+
+  VCPU="${VCPU:-0}"
+  MEMORY_GB="${MEMORY_GB:-0}"
+  DISK_FREE_GB="${DISK_FREE_GB:-0}"
+
+  echo "Host resource preflight:"
+  echo "  vCPU:             $VCPU detected, minimum $EASY_WAZUH_MIN_VCPU"
+  echo "  RAM:              ${MEMORY_GB} GB detected, minimum ${REQUIRED_MEMORY_GB} GB"
+  echo "  Free disk space:  ${DISK_FREE_GB} GB available for $INSTALL_PATH, minimum ${REQUIRED_DISK_FREE_GB} GB"
+  echo ""
+
+  if [ "$VCPU" -lt "$EASY_WAZUH_MIN_VCPU" ]; then
+    FAILURES+=("vCPU $VCPU < $EASY_WAZUH_MIN_VCPU")
+  fi
+  if [ "$MEMORY_GB" -lt "$REQUIRED_MEMORY_GB" ]; then
+    FAILURES+=("RAM ${MEMORY_GB} GB < ${REQUIRED_MEMORY_GB} GB")
+  fi
+  if [ "$DISK_FREE_GB" -lt "$REQUIRED_DISK_FREE_GB" ]; then
+    FAILURES+=("free disk ${DISK_FREE_GB} GB < ${REQUIRED_DISK_FREE_GB} GB")
+  fi
+
+  if [ "${#FAILURES[@]}" -gt 0 ]; then
+    echo "Error: this host is below the minimum resource requirements for this Wazuh PoC deployment."
+    printf '  - %s\n' "${FAILURES[@]}"
+    echo ""
+    echo "Increase the VM resources before installing Wazuh, or rerun with"
+    echo "EASY_WAZUH_SKIP_RESOURCE_CHECK=yes only for lab troubleshooting."
+    exit 1
+  fi
+}
+
 # Warn instead of silently colliding with a previous Wazuh deployment.
 check_existing_wazuh_containers() {
   local MATCHES
@@ -1321,11 +1452,20 @@ echo ""
 print_wazuh_connection_summary
 echo ""
 
+WAZUH_DIR="/opt/wazuh"
+
+echo "[2/12] Checking host resources..."
+
+check_host_resources "$WAZUH_DIR"
+
+echo "Host resources meet the configured minimums."
+echo ""
+
 if [ "$INSTALL_DOCKER" = "yes" ]; then
   guard_fresh_install_against_existing_container_runtime
 fi
 
-echo "[2/11] Updating package list and installing prerequisites..."
+echo "[3/12] Updating package list and installing prerequisites..."
 
 apt update
 apt install -y ca-certificates curl git gnupg
@@ -1334,14 +1474,14 @@ echo "Prerequisites installed."
 echo ""
 
 if [ "$INSTALL_DOCKER" = "yes" ]; then
-  echo "[3/11] Verifying fresh install container runtime preflight..."
+  echo "[4/12] Verifying fresh install container runtime preflight..."
 
   guard_fresh_install_against_existing_container_runtime
 
   echo "No existing container runtime conflicts detected."
   echo ""
 
-  echo "[4/11] Installing Docker repository key..."
+  echo "[5/12] Installing Docker repository key..."
 
   install -m 0755 -d /etc/apt/keyrings
   rm -f /etc/apt/keyrings/docker.gpg
@@ -1354,7 +1494,7 @@ if [ "$INSTALL_DOCKER" = "yes" ]; then
   echo "Docker key installed."
   echo ""
 
-  echo "[5/11] Adding Docker APT repository..."
+  echo "[6/12] Adding Docker APT repository..."
 
   DEBIAN_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
 
@@ -1373,7 +1513,7 @@ if [ "$INSTALL_DOCKER" = "yes" ]; then
   echo "Docker repository added."
   echo ""
 
-  echo "[6/11] Installing Docker Engine and Docker Compose plugin..."
+  echo "[7/12] Installing Docker Engine and Docker Compose plugin..."
 
   apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
@@ -1382,7 +1522,7 @@ if [ "$INSTALL_DOCKER" = "yes" ]; then
   echo "Docker installed and started."
   echo ""
 else
-  echo "[3/11] Checking existing Docker environment..."
+  echo "[4/12] Checking existing Docker environment..."
 
   if ! command -v docker >/dev/null 2>&1; then
     echo "Error: docker command was not found."
@@ -1420,7 +1560,7 @@ echo ""
 check_existing_wazuh_containers
 check_wazuh_port_availability
 
-echo "[7/11] Configuring Wazuh indexer kernel requirement..."
+echo "[8/12] Configuring Wazuh indexer kernel requirement..."
 
 sysctl -w vm.max_map_count=262144
 echo "vm.max_map_count=262144" > /etc/sysctl.d/99-wazuh.conf
@@ -1428,9 +1568,8 @@ echo "vm.max_map_count=262144" > /etc/sysctl.d/99-wazuh.conf
 echo "vm.max_map_count configured."
 echo ""
 
-echo "[8/11] Preparing Wazuh installation directory..."
+echo "[9/12] Preparing Wazuh installation directory..."
 
-WAZUH_DIR="/opt/wazuh"
 REPO_DIR="$WAZUH_DIR/wazuh-docker"
 STACK_DIR="$REPO_DIR/$STACK_SUBDIR"
 COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
@@ -1495,7 +1634,7 @@ echo ""
 write_deployment_metadata
 echo ""
 
-echo "[9/11] Generating Wazuh self-signed certificates..."
+echo "[10/12] Generating Wazuh self-signed certificates..."
 
 cd "$STACK_DIR"
 
@@ -1535,7 +1674,7 @@ fi
 echo "Certificates ready."
 echo ""
 
-echo "[10/11] Final confirmation before starting Wazuh containers..."
+echo "[11/12] Final confirmation before starting Wazuh containers..."
 
 echo ""
 echo "The next step will pull Wazuh Docker images, generate/use local volumes,"
@@ -1560,7 +1699,7 @@ esac
 
 echo ""
 
-echo "[11/11] Starting Wazuh containers..."
+echo "[12/12] Starting Wazuh containers..."
 
 docker compose -f "$COMPOSE_FILE" pull
 docker compose -f "$COMPOSE_FILE" up -d
