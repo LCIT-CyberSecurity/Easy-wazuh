@@ -52,3 +52,8 @@ def test_public_fqdn_override_preserves_admin_value():
     output = run_bash('WAZUH_PUBLIC_DNS_SUFFIX=""; WAZUH_INTERNAL_DNS_SUFFIX="sec.lan"; WAZUH_PUBLIC_FQDN="siem.example.internal"; prompt_public_endpoint "VM-Openvas.home.lan" "192.168.1.28"; printf "%s" "$PUBLIC_ENDPOINT"')
 
     assert output == "siem.example.internal"
+
+def test_public_prompt_continues_when_default_fqdn_does_not_resolve():
+    output = run_bash('WAZUH_PUBLIC_DNS_SUFFIX=""; WAZUH_INTERNAL_DNS_SUFFIX="not-resolving.invalid"; WAZUH_PUBLIC_FQDN=""; prompt_public_endpoint "VM-Openvas.home.lan" "192.168.1.28" <<< ""; printf "%s" "$PUBLIC_ENDPOINT"')
+
+    assert output == "wazuh.not-resolving.invalid"

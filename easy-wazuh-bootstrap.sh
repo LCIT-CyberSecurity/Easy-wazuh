@@ -241,7 +241,7 @@ prompt_public_endpoint() {
   DEFAULT_ENDPOINT="$DEFAULT_FQDN"
 
   if [ -n "$DEFAULT_FQDN" ] && ! is_valid_ipv4 "$DEFAULT_FQDN" && command -v getent >/dev/null 2>&1; then
-    DEFAULT_FQDN_IP="$(resolve_first_ipv4 "$DEFAULT_FQDN")"
+    DEFAULT_FQDN_IP="$(resolve_first_ipv4 "$DEFAULT_FQDN" || true)"
     if [ -n "$DEFAULT_FQDN_IP" ] && [ -n "$DETECTED_IP" ] && [ "$DEFAULT_FQDN_IP" != "$DETECTED_IP" ]; then
       echo "Warning: default dashboard FQDN $DEFAULT_FQDN resolves to $DEFAULT_FQDN_IP,"
       echo "but this VM IP appears to be $DETECTED_IP."
