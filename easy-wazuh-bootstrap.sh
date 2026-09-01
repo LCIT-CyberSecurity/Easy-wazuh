@@ -980,6 +980,24 @@ docker_daemon_is_available() {
   docker_is_available && docker info >/dev/null 2>&1
 }
 
+package_is_installed() {
+  local PACKAGE="$1"
+
+  dpkg-query -W -f='${Status}' "$PACKAGE" 2>/dev/null | grep -q "install ok installed"
+}
+
+systemd_unit_is_active() {
+  local UNIT="$1"
+
+  command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$UNIT"
+}
+
+runtime_command_exists() {
+  local COMMAND="$1"
+
+  command -v "$COMMAND" >/dev/null 2>&1
+}
+
 count_docker_containers() {
   if docker_daemon_is_available; then
     docker ps -aq 2>/dev/null | wc -l | tr -d ' '
@@ -1024,40 +1042,71 @@ print_existing_docker_summary() {
   fi
 }
 
-# Refuse the fresh install path if Docker already contains workloads.
-guard_fresh_install_against_existing_docker() {
-  local TOTAL_CONTAINERS
-  local RUNNING_CONTAINERS
-  local TOTAL_IMAGES
+# Refuse the fresh install path if container runtimes or workloads already exist.
+guard_fresh_install_against_existing_container_runtime() {
+  local TOTAL_CONTAINERS="0"
+  local RUNNING_CONTAINERS="0"
+  local TOTAL_IMAGES="0"
+  local CONFLICTS=()
+  local PKG
+  local CMD
+  local UNIT
 
-  if ! docker_is_available; then
-    return 0
+  for PKG in docker.io docker-ce docker-ce-cli docker-compose docker-compose-plugin podman podman-docker containerd containerd.io runc cri-o cri-o-runc kubelet kubectl kubeadm k3s microk8s; do
+    if package_is_installed "$PKG"; then
+      CONFLICTS+=("installed package: $PKG")
+    fi
+  done
+
+  for CMD in docker podman nerdctl ctr crictl kubectl kubelet kubeadm k3s microk8s; do
+    if runtime_command_exists "$CMD"; then
+      CONFLICTS+=("available command: $CMD")
+    fi
+  done
+
+  for UNIT in docker docker.socket containerd podman podman.socket crio kubelet k3s snap.microk8s.daemon-containerd snap.microk8s.daemon-kubelite; do
+    if systemd_unit_is_active "$UNIT"; then
+      CONFLICTS+=("active service: $UNIT")
+    fi
+  done
+
+  if docker_is_available; then
+    echo ""
+    echo "Safety check: Docker already appears to be installed on this machine."
+    print_existing_docker_summary
+    echo ""
+
+    if docker_daemon_is_available; then
+      TOTAL_CONTAINERS="$(count_docker_containers)"
+      RUNNING_CONTAINERS="$(count_running_docker_containers)"
+      TOTAL_IMAGES="$(count_docker_images)"
+
+      if [ "$TOTAL_CONTAINERS" -gt 0 ]; then
+        CONFLICTS+=("Docker containers present: $TOTAL_CONTAINERS")
+      fi
+      if [ "$TOTAL_IMAGES" -gt 0 ]; then
+        CONFLICTS+=("Docker images present: $TOTAL_IMAGES")
+      fi
+    fi
   fi
 
-  echo ""
-  echo "Safety check: Docker already appears to be installed on this machine."
-  print_existing_docker_summary
-  echo ""
-
-  if docker_daemon_is_available; then
-    TOTAL_CONTAINERS="$(count_docker_containers)"
-    RUNNING_CONTAINERS="$(count_running_docker_containers)"
-    TOTAL_IMAGES="$(count_docker_images)"
-
-    if [ "$TOTAL_CONTAINERS" -gt 0 ] || [ "$TOTAL_IMAGES" -gt 0 ]; then
-      echo "Error: this does not look like a fresh Debian Docker host."
-      echo "The selected mode could modify the Docker installation while existing"
-      echo "containers or images are present."
+  if [ "${#CONFLICTS[@]}" -gt 0 ]; then
+    echo "Error: this does not look like a fresh Debian container host."
+    echo "The selected fresh install mode will not remove or replace existing"
+    echo "Docker, Kubernetes, Podman, containerd or CRI components."
+    echo ""
+    echo "Detected container runtime conflicts:"
+    printf '  - %s\n' "${CONFLICTS[@]}"
+    echo ""
+    echo "Use installation mode 2 to keep the current Docker environment, or prepare"
+    echo "a clean host before using fresh install mode."
+    echo ""
+    if docker_daemon_is_available && [ "$RUNNING_CONTAINERS" -gt 0 ]; then
+      echo "Currently running Docker containers:"
+      docker ps --format '  {{.Names}}	{{.Image}}	{{.Status}}'
       echo ""
-      echo "Use installation mode 2 to keep the current Docker environment."
-      echo ""
-      if [ "$RUNNING_CONTAINERS" -gt 0 ]; then
-        echo "Currently running containers:"
-        docker ps --format '  {{.Names}}	{{.Image}}	{{.Status}}'
-        echo ""
-      fi
-      exit 1
     fi
+    exit 1
   fi
 }
 
@@ -1099,14 +1148,9 @@ check_wazuh_port_availability() {
         echo "Wazuh-related containers found:"
         echo "$WAZUH_CONTAINERS"
         echo ""
-        echo "For a destructive lab reset, stop the installer and run:"
-        echo "  sudo docker ps -a --filter name=wazuh"
-        echo "  sudo docker rm -f <wazuh-container-name> ..."
-        echo "  sudo docker volume ls | grep wazuh"
-        echo "  sudo docker volume rm <wazuh-volume-name> ..."
-        echo "  sudo rm -rf /opt/wazuh"
-        echo ""
-        echo "Do not run these commands on a client environment unless data loss is approved."
+        echo "For a lab reset, stop the installer and review Wazuh-related containers,"
+        echo "volumes and /opt/wazuh manually before any destructive cleanup."
+        echo "Do not remove data on a client environment unless data loss is approved."
         echo ""
       fi
     fi
@@ -1283,7 +1327,7 @@ print_wazuh_connection_summary
 echo ""
 
 if [ "$INSTALL_DOCKER" = "yes" ]; then
-  guard_fresh_install_against_existing_docker
+  guard_fresh_install_against_existing_container_runtime
 fi
 
 echo "[2/11] Updating package list and installing prerequisites..."
@@ -1295,13 +1339,11 @@ echo "Prerequisites installed."
 echo ""
 
 if [ "$INSTALL_DOCKER" = "yes" ]; then
-  echo "[3/11] Removing conflicting Docker packages if present..."
+  echo "[3/11] Verifying fresh install container runtime preflight..."
 
-  for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do
-    apt remove -y "$pkg" || true
-  done
+  guard_fresh_install_against_existing_container_runtime
 
-  echo "Conflicting packages removed or not present."
+  echo "No existing container runtime conflicts detected."
   echo ""
 
   echo "[4/11] Installing Docker repository key..."
