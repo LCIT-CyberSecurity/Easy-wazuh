@@ -1,75 +1,79 @@
 # Integration Testing Checklist
 
-Run these checks only on a prepared Docker/Wazuh integration machine. Local unit tests mock Docker, Wazuh API, NGINX and certificate tooling; passing them does not prove real scale safety.
+Run these checks only on a prepared Easy-Wazuh integration machine. Local tests mock Wazuh API, Wazuh Indexer API and NGINX; passing them does not prove real production behavior.
 
-Automatic incremental certificate generation is intentionally blocked until the certificate behavior below passes on a real Easy-Wazuh stack. Preprovisioned worker certificates can be accepted by the orchestrator, but the real certificate lifecycle must still be validated here.
+V1 is read-only. Do not run live scaling as part of V1 acceptance.
+
+## Bootstrap Baseline
 
 - [ ] `easy-wazuh-bootstrap.sh` performs existing multi-node bootstrap
-- [ ] deployment metadata created
-- [ ] deployment metadata accurate
-- [ ] default naming
-- [ ] custom naming
-- [ ] internal FQDN naming
-- [ ] padding preserved
-- [ ] baseline persisted
-- [ ] existing Easy-Wazuh Compose project detected
-- [ ] existing networks preserved
-- [ ] existing volumes preserved
-- [ ] existing containers preserved
-- [ ] status on healthy environment
-- [ ] analyze on healthy environment
-- [ ] next worker name resolves to worker03
-- [ ] unique hostname
-- [ ] unique Wazuh node_name
-- [ ] dedicated worker configuration generated
-- [ ] Wazuh CA fingerprint recorded
-- [ ] existing cert fingerprints recorded
-- [ ] worker03 certificate generated/prepared
-- [ ] CA fingerprint unchanged
-- [ ] existing cert fingerprints unchanged
-- [ ] worker03 certificate valid
-- [ ] Dashboard certificate unchanged
-- [ ] effective Compose valid
-- [ ] worker03 only new service
-- [ ] existing services not recreated
-- [ ] worker03 Docker healthy
-- [ ] worker03 joins Wazuh cluster
-- [ ] exactly one master remains
-- [ ] NGINX agent traffic upstream updated
-- [ ] existing master entry preserved
-- [ ] existing workers preserved
-- [ ] enrollment backend unchanged unless required by actual topology
-- [ ] agents continue collecting during scale
-- [ ] no obvious ingestion interruption
-- [ ] new worker begins receiving agents
-- [ ] distribution stabilizes over time
+- [ ] deployment metadata is created at `/opt/wazuh/easy-wazuh/deployment.yaml`
+- [ ] deployment metadata records one master, one worker, three indexers, one dashboard and one NGINX
+- [ ] default naming, custom suffixes and padding are preserved
 - [ ] Dashboard remains one instance
-- [ ] Dashboard remains reachable
-- [ ] Dashboard TLS unchanged
-- [ ] indexers unchanged
-- [ ] rollback after certificate failure
-- [ ] rollback after config failure
-- [ ] rollback after Compose failure
-- [ ] rollback after Docker health failure
-- [ ] rollback after cluster join failure
-- [ ] rollback after NGINX failure
-- [ ] simulated interrupted transaction detected
-- [ ] no worker04 created while worker03 transaction incomplete
-- [ ] scale-down worker03
-- [ ] worker03 removed from NGINX
-- [ ] worker03 stopped gracefully
-- [ ] worker03 removed from desired Compose
-- [ ] worker03 volume preserved
-- [ ] worker03 cannot resurrect after future Compose operation
-- [ ] baseline scale-down protection
-- [ ] HOST_PRESSURE blocks worker scale-up
-- [ ] INDEXER_PRESSURE does not trigger worker scaling
-- [ ] DASHBOARD_PRESSURE does not create second Dashboard
+- [ ] Indexers remain unchanged
 
-Continuity checks:
+## Container Runtime
 
-- before scaling: record received events, agents and cluster status
-- during scaling: verify existing workers remain running
-- after scaling: verify no obvious event ingestion gap
+- [ ] orchestrator container builds from `wazuh-orchestrator/Dockerfile`
+- [ ] container runs as non-root user `10001`
+- [ ] container starts without `/var/run/docker.sock`
+- [ ] container starts without Docker group membership
+- [ ] container can reach Wazuh API over HTTPS
+- [ ] container can reach Wazuh Indexer API over HTTPS
+- [ ] container can reach NGINX health URL
+- [ ] read-only mounts are sufficient for metadata/Compose discovery
 
-Do not claim zero event loss before these integration tests pass.
+## Wazuh API Diagnostics
+
+- [ ] `status` returns topology without Docker Engine access
+- [ ] `analyze --json` returns Wazuh cluster health
+- [ ] `analyze --duration 120 --json` performs repeated collection
+- [ ] per-node daemon stats are collected through `/cluster/{node_id}/daemons/stats`
+- [ ] connected agents per node are collected when exposed
+- [ ] queue usage/growth is reported when exposed
+- [ ] discarded/dropped/rejected counters are reported when exposed
+- [ ] EPS is reported only after two valid counter samples
+- [ ] counter reset produces `eps: null`, not a negative EPS
+- [ ] unavailable Wazuh API returns `UNKNOWN` without traceback
+- [ ] partially unavailable worker produces degraded/unknown diagnostics, not healthy
+
+## Indexer Diagnostics
+
+- [ ] healthy indexer cluster does not produce `INDEXER_PRESSURE`
+- [ ] red health produces `INDEXER_PRESSURE`
+- [ ] unassigned shards produce `INDEXER_PRESSURE`
+- [ ] write/index/search rejects produce `INDEXER_PRESSURE`
+- [ ] low filesystem free space produces `INDEXER_PRESSURE`
+- [ ] high JVM heap produces `INDEXER_PRESSURE`
+- [ ] indexer pressure does not recommend a manager worker as the default fix
+
+## NGINX Diagnostics
+
+- [ ] healthy NGINX URL reports reachable/healthy
+- [ ] unavailable NGINX URL reports `NGINX_DEGRADED`
+- [ ] `stub_status` metrics are parsed when configured
+- [ ] missing `stub_status` reports advanced metrics unavailable while keeping simple health usable
+- [ ] no root access is required for NGINX checks
+
+## Recommendations
+
+- [ ] healthy Wazuh/Indexer/NGINX returns `OK`
+- [ ] moderate or single-sample manager pressure returns `WATCH`
+- [ ] persistent manager queue pressure plus dropped/discarded events returns `SCALE_RECOMMENDED`
+- [ ] `SCALE_RECOMMENDED` recommends only current workers -> current workers + 1
+- [ ] unknown host CPU/RAM/IO reports `HOST_CAPACITY_UNKNOWN`
+- [ ] unknown host capacity does not suppress manager pressure diagnostics
+- [ ] host saturation, when metrics are configured, does not claim that adding a worker on the same host will fix the issue
+
+## Non-Regression Safety
+
+- [ ] `python3 wazuh-orchestrator.py scale --workers <target>` exits before any backend operation
+- [ ] Python `scale()` raises before Docker, NGINX, certificate, transaction or lock operations
+- [ ] no worker is created, removed, stopped or started by V1 commands
+- [ ] no Compose override is generated by V1 commands
+- [ ] no NGINX config is modified by V1 commands
+- [ ] no certificate material is generated, overwritten or deleted by V1 commands
+- [ ] no passwords, bearer tokens, Authorization headers or private keys appear in CLI output or logs
+
+Do not claim production readiness for a specific customer deployment until these integration checks pass on that deployment or an equivalent staging environment.

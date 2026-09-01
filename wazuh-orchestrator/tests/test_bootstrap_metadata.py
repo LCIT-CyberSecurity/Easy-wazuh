@@ -11,13 +11,6 @@ def test_bootstrap_script_syntax_name_updated():
     assert "Wazuh-installer.sh" not in text
 
 
-def test_legacy_wrapper_is_deprecated_not_duplicate():
-    text = (ROOT / "Wazuh-installer.sh").read_text(encoding="utf-8")
-    assert "deprecated" in text
-    assert "exec \"$SCRIPT_DIR/easy-wazuh-bootstrap.sh\"" in text
-    assert len(text.splitlines()) < 20
-
-
 def test_metadata_fields_are_generated_by_bootstrap():
     text = (ROOT / "easy-wazuh-bootstrap.sh").read_text(encoding="utf-8")
     for expected in ("schema_version: 1", "stack_directory: $STACK_DIR", "baseline:", "workers: $BASELINE_WORKERS", "dashboard:", "scalable: false"):

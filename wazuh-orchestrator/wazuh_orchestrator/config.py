@@ -101,10 +101,25 @@ def validate_config(cfg: OrchestratorConfig) -> None:
         raise ConfigurationError("scale_down.drain_seconds must be >= 0.")
     if cfg.runtime.wazuh_api_timeout_seconds < 1:
         raise ConfigurationError("runtime.wazuh_api_timeout_seconds must be >= 1.")
+    if cfg.runtime.indexer_api_timeout_seconds < 1:
+        raise ConfigurationError("runtime.indexer_api_timeout_seconds must be >= 1.")
+    if cfg.runtime.nginx_timeout_seconds < 1:
+        raise ConfigurationError("runtime.nginx_timeout_seconds must be >= 1.")
+    if cfg.runtime.metrics_provider not in {"none", "local"}:
+        raise ConfigurationError("runtime.metrics_provider must be one of: none, local.")
     if cfg.runtime.wazuh_api_url:
         parsed = urlparse(cfg.runtime.wazuh_api_url)
         if parsed.scheme != "https" or not parsed.netloc:
             raise ConfigurationError("runtime.wazuh_api_url must be an HTTPS URL.")
+    if cfg.runtime.indexer_api_url:
+        parsed = urlparse(cfg.runtime.indexer_api_url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ConfigurationError("runtime.indexer_api_url must be an HTTPS URL.")
+    for url_name, url_value in (("runtime.nginx_health_url", cfg.runtime.nginx_health_url), ("runtime.nginx_stub_status_url", cfg.runtime.nginx_stub_status_url)):
+        if url_value:
+            parsed = urlparse(url_value)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ConfigurationError(f"{url_name} must be an HTTP or HTTPS URL.")
     if cfg.logging.level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ConfigurationError("logging.level must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL.")
     _validate_percentages(cfg)

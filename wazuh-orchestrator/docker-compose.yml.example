@@ -1,0 +1,24 @@
+services:
+  wazuh-orchestrator:
+    build:
+      context: .
+    image: easy-wazuh-orchestrator:local
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["--config", "/app/config/orchestrator.yaml", "analyze", "--duration", "120"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./config/orchestrator.yaml:/app/config/orchestrator.yaml:ro
+      - /opt/wazuh/easy-wazuh/deployment.yaml:/opt/wazuh/easy-wazuh/deployment.yaml:ro
+      - /opt/wazuh/wazuh-docker:/opt/wazuh/wazuh-docker:ro
+    networks:
+      - wazuh
+
+networks:
+  wazuh:
+    external: true

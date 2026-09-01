@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from wazuh_orchestrator.config import load_config
-from wazuh_orchestrator.models import AnalysisInput, ClusterState, HostMetrics, IndexerState, SafetyError, WorkerMetrics
+from wazuh_orchestrator.models import AnalysisInput, ClusterState, DashboardState, HostMetrics, IndexerState, NginxState, SafetyError, WorkerMetrics
 from wazuh_orchestrator.scaler import build_plan
 
 
@@ -11,10 +11,36 @@ def cfg():
     return load_config()
 
 
-def snapshot(cluster=None, workers=None, host=None):
+def pressure_worker(name, baseline=False, managed=False):
+    return WorkerMetrics(
+        name,
+        queue_size=100,
+        queue_delta=10,
+        events_received=1000,
+        events_processed=990,
+        queue_usage_percent=90,
+        discarded_count=1,
+        dropped_count=1,
+        connected_agents=50,
+        cluster_sync_status="synced",
+        health="healthy",
+        baseline_worker=baseline,
+        managed_by_orchestrator=managed,
+        samples_with_pressure=3,
+    )
+
+
+def snapshot(cluster=None, workers=None, host=None, dashboard=None):
     cluster = cluster or ClusterState("multi-node", "wazuh-manager01.local", ("wazuh-manager02.local", "wazuh-manager03.local"), ("i",), "d", "nginx", None, None, "default", cluster_healthy=True, nginx_healthy=True)
-    workers = workers or (WorkerMetrics("wazuh-manager02.local", 80, 20, 1, 1, baseline_worker=True), WorkerMetrics("wazuh-manager03.local", 78, 20, 1, 1, managed_by_orchestrator=True))
-    return AnalysisInput(cluster, host or HostMetrics(4, 40, 40, 1024, 0, 10, 1, 80, "/"), workers, IndexerState(("i",), True, 20, 20, 80))
+    workers = workers or (pressure_worker("wazuh-manager02.local", baseline=True), pressure_worker("wazuh-manager03.local", managed=True))
+    return AnalysisInput(
+        cluster,
+        host or HostMetrics(None, None, None, None, None, None, None, None, None),
+        workers,
+        IndexerState(("i",), True, disk_free_percent=80, health_status="green", rejected_operations=0, fs_free_percent=80),
+        dashboard or DashboardState("d", True),
+        NginxState("nginx", True, True, advanced_metrics_available=False),
+    )
 
 
 def test_target_under_baseline_refused():
@@ -38,28 +64,17 @@ def test_single_node_scaling_refused():
         build_plan(s, cfg(), 1)
 
 
-def test_low_confidence_scaling_refused():
-    s = snapshot(host=HostMetrics(4, None, 40, 1024, 0, 10, 1, 80, "/"))
-    with pytest.raises(SafetyError):
-        build_plan(s, cfg(), 3)
+def test_plan_reports_host_capacity_unknown_without_blocking_read_only_plan():
+    plan = build_plan(snapshot(), cfg(), 3)
+    assert plan.action == "scale_up"
+    assert plan.projection.reason == "HOST_CAPACITY_UNKNOWN"
 
 
-def test_host_reserve_insuffisante_refused():
-    s = snapshot(host=HostMetrics(4, 84, 40, 1024, 0, 10, 1, 80, "/"))
-    with pytest.raises(SafetyError):
-        build_plan(s, cfg(), 3)
-
-
-def test_projected_reserve_insuffisante_refused():
-    s = snapshot(workers=(WorkerMetrics("w1", 60, 60, 1, 1), WorkerMetrics("w2", 60, 60, 1, 1)), host=HostMetrics(4, 70, 70, 1024, 0, 10, 1, 80, "/"))
-    with pytest.raises(SafetyError):
-        build_plan(s, cfg(), 3)
-
-
-def test_healthy_cluster_scale_up_refused_without_recommendation():
-    workers = (WorkerMetrics("w1", 20, 20), WorkerMetrics("w2", 20, 20))
-    with pytest.raises(SafetyError, match="does not recommend"):
-        build_plan(snapshot(workers=workers), cfg(), 3)
+def test_plan_reports_risks_when_analysis_does_not_recommend_scale():
+    workers = (WorkerMetrics("w1", events_received=100, queue_usage_percent=5, health="healthy"), WorkerMetrics("w2", events_received=100, queue_usage_percent=5, health="healthy"))
+    plan = build_plan(snapshot(workers=workers), cfg(), 3)
+    assert plan.action == "scale_up"
+    assert plan.risks
 
 
 def test_plan_without_backend_uses_current_worker_count_for_fallback_name():
@@ -69,7 +84,7 @@ def test_plan_without_backend_uses_current_worker_count_for_fallback_name():
 
 def test_plan_scale_down_3_to_2():
     c = ClusterState("multi-node", "m", ("w1", "w2", "w3"), ("i",), "d", "nginx", None, None, "default", cluster_healthy=True, nginx_healthy=True)
-    ws = (WorkerMetrics("w1", 20, 20, baseline_worker=True), WorkerMetrics("w2", 20, 20, managed_by_orchestrator=True), WorkerMetrics("w3", 20, 20, managed_by_orchestrator=True))
+    ws = (WorkerMetrics("w1", baseline_worker=True), WorkerMetrics("w2", managed_by_orchestrator=True), WorkerMetrics("w3", managed_by_orchestrator=True))
     plan = build_plan(snapshot(c, ws), cfg(), 2)
     assert plan.action == "scale_down"
     assert plan.worker_to_remove == "w3"
@@ -77,7 +92,7 @@ def test_plan_scale_down_3_to_2():
 
 def test_baseline_worker_never_removed():
     c = ClusterState("multi-node", "m", ("w1", "w2"), ("i",), "d", "nginx", None, None, "default", cluster_healthy=True, nginx_healthy=True)
-    ws = (WorkerMetrics("w1", 20, 20, baseline_worker=True), WorkerMetrics("w2", 20, 20, baseline_worker=True))
+    ws = (WorkerMetrics("w1", baseline_worker=True), WorkerMetrics("w2", baseline_worker=True))
     with pytest.raises(SafetyError):
         build_plan(snapshot(c, ws), cfg(), 1)
 
@@ -93,9 +108,8 @@ def test_incomplete_transaction_scaling_refused():
         build_plan(snapshot(c), cfg(), 3)
 
 
-def test_dashboard_pressure_scaling_refused():
-    from wazuh_orchestrator.models import DashboardState
-    s = snapshot()
-    s = AnalysisInput(s.cluster, s.host, s.workers, s.indexer, DashboardState("d", True, 90, 20, 0))
-    with pytest.raises(SafetyError, match="DASHBOARD_PRESSURE"):
-        build_plan(s, cfg(), 3)
+def test_dashboard_pressure_is_a_read_only_plan_risk():
+    s = snapshot(dashboard=DashboardState("d", True, 90, 20, 0))
+    plan = build_plan(s, cfg(), 3)
+    assert plan.risks
+    assert any("Dashboard" in risk for risk in plan.risks)

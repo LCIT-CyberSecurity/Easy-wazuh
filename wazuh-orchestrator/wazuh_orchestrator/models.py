@@ -9,6 +9,7 @@ from typing import Any, Literal
 UNKNOWN: None = None
 
 Confidence = Literal["HIGH", "MEDIUM", "LOW"]
+RecommendationStatus = Literal["OK", "WATCH", "SCALE_RECOMMENDED", "UNKNOWN", "INDEXER_PRESSURE"]
 TopologyMode = Literal["unknown", "single-node", "multi-node"]
 
 
@@ -88,7 +89,7 @@ class SafetySettings:
     require_multi_node_for_scaling: bool = True
     require_cluster_healthy: bool = True
     require_nginx_healthy: bool = True
-    require_complete_host_metrics: bool = True
+    require_complete_host_metrics: bool = False
     backup_before_change: bool = True
 
 
@@ -108,11 +109,21 @@ class RuntimeSettings:
     orchestrator_root: Path = Path("wazuh-orchestrator")
     deployment_metadata_path: Path = Path("/opt/wazuh/easy-wazuh/deployment.yaml")
     compose_timeout_seconds: int = 120
+    metrics_provider: str = "none"
     wazuh_api_url: str | None = None
     wazuh_api_username: str | None = None
     wazuh_api_password: str | None = None
     wazuh_api_verify_tls: bool = True
     wazuh_api_timeout_seconds: int = 10
+    indexer_api_url: str | None = None
+    indexer_api_username: str | None = None
+    indexer_api_password: str | None = None
+    indexer_api_verify_tls: bool = True
+    indexer_api_timeout_seconds: int = 10
+    nginx_health_url: str | None = None
+    nginx_stub_status_url: str | None = None
+    nginx_verify_tls: bool = True
+    nginx_timeout_seconds: int = 5
 
 
 @dataclass(frozen=True)
@@ -182,15 +193,25 @@ class ContainerMetrics:
 @dataclass(frozen=True)
 class WorkerMetrics:
     name: str
-    cpu_percent: float | None
+    cpu_percent: float | None = None
     memory_percent: float | None = None
     queue_size: int | None = None
     queue_delta: int | None = None
     eps: float | None = None
+    events_received: int | None = None
+    events_processed: int | None = None
+    queue_usage_percent: float | None = None
+    queue_capacity: int | None = None
+    discarded_count: int | None = None
+    dropped_count: int | None = None
     agent_count: int | None = None
+    connected_agents: int | None = None
+    cluster_sync_status: str | None = None
+    health: str | None = None
     restart_count: int | None = None
     managed_by_orchestrator: bool = False
     baseline_worker: bool = False
+    samples_with_pressure: int = 0
 
 
 @dataclass(frozen=True)
@@ -200,8 +221,28 @@ class IndexerState:
     cpu_percent: float | None = None
     memory_percent: float | None = None
     disk_free_percent: float | None = None
+    health_status: str | None = None
+    node_count: int | None = None
+    active_shards: int | None = None
+    unassigned_shards: int | None = None
+    pending_tasks: int | None = None
+    indexing_total: int | None = None
+    indexing_rate: float | None = None
+    rejected_operations: int | None = None
+    fs_free_percent: float | None = None
+    heap_used_percent: float | None = None
+    unavailable: bool = False
 
 
+@dataclass(frozen=True)
+class NginxState:
+    name: str | None = None
+    reachable: bool | None = None
+    healthy: bool | None = None
+    active_connections: int | None = None
+    requests: int | None = None
+    advanced_metrics_available: bool | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -248,6 +289,7 @@ class AnalysisInput:
     workers: tuple[WorkerMetrics, ...]
     indexer: IndexerState = field(default_factory=IndexerState)
     dashboard: DashboardState = field(default_factory=DashboardState)
+    nginx: NginxState = field(default_factory=NginxState)
 
 
 @dataclass(frozen=True)
@@ -271,6 +313,8 @@ class AnalysisResult:
     explanations: tuple[str, ...]
     projection: HostCapacityProjection | None = None
     pressure_signals: tuple[str, ...] = ()
+    status: RecommendationStatus = "UNKNOWN"
+    host_capacity_status: str = "HOST_CAPACITY_UNKNOWN"
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from wazuh_orchestrator.models import AnalysisInput, ClusterState, HostMetrics, IndexerState, WorkerMetrics
+from wazuh_orchestrator.models import AnalysisInput, ClusterState, HostMetrics, IndexerState, NginxState, WorkerMetrics
 
 
 CLI_PATH = Path(__file__).resolve().parents[1] / "wazuh-orchestrator.py"
@@ -142,7 +142,7 @@ def test_cli_scale_is_monitoring_only(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "Action:          scale_up" in captured.out
-    assert "Scaling execution is disabled in the beta orchestrator" in captured.err
+    assert "Scaling execution is disabled in Wazuh Orchestrator V1" in captured.err
     assert backend.commands == []
 
 
@@ -178,3 +178,135 @@ def test_cli_scale_requires_no_yes_flag(monkeypatch):
     cli = load_cli()
     monkeypatch.setattr(cli, "_snapshot", lambda cfg: snapshot())
     assert cli.main(["scale", "--workers", "3", "--" + "yes"]) == 2
+
+
+def test_cli_analyze_duration_collects_multiple_snapshots(monkeypatch, capsys):
+    cli = load_cli()
+    calls = []
+    samples = [snapshot(), snapshot(), snapshot()]
+
+    def fake_snapshot(cfg, previous=None, elapsed_seconds=None):
+        calls.append((previous, elapsed_seconds))
+        return samples[min(len(calls) - 1, len(samples) - 1)]
+
+    monkeypatch.setattr(cli, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(cli.time, "monotonic", iter([0, 10, 10, 20]).__next__)
+
+    assert cli.main(["analyze", "--duration", "30", "--json"]) == 0
+
+    assert len(calls) == 3
+    assert calls[0] == (None, None)
+    assert calls[1][0] is samples[0]
+    assert calls[1][1] == 10
+    assert calls[2][0] is samples[1]
+    assert calls[2][1] == 10
+    assert "status" in capsys.readouterr().out
+
+
+class FakeWazuhClient:
+    def get_cluster_state(self):
+        return {"data": {"enabled": "yes", "running": "yes"}}
+
+    def get_nodes(self):
+        return {
+            "data": {
+                "affected_items": [
+                    {"name": "wazuh-manager02.local", "status": "active", "agents": 50, "sync_status": "synced"},
+                    {"name": "wazuh-manager03.local", "status": "active", "agents": 55, "sync_status": "synced"},
+                ]
+            }
+        }
+
+    def get_node_daemon_stats(self, node_id):
+        return {
+            "data": {
+                "affected_items": [
+                    {
+                        "name": "wazuh-remoted",
+                        "metrics": {
+                            "messages": {"received_breakdown": {"event": 1400, "discarded": 2}},
+                            "queues": {"received": {"size": 131072, "usage": 92}},
+                            "dropped_count": 1,
+                        },
+                    },
+                    {"name": "wazuh-analysisd", "metrics": {"events_processed": 1390}},
+                ]
+            }
+        }
+
+
+class FakeIndexerClient:
+    def cluster_health(self):
+        return {"status": "green", "number_of_nodes": 3, "active_shards": 12, "unassigned_shards": 0, "number_of_pending_tasks": 0}
+
+    def cluster_stats(self):
+        return {"indices": {"indexing": {"index_total": 2400}}}
+
+    def nodes_stats(self):
+        return {
+            "nodes": {
+                "n1": {
+                    "thread_pool": {"write": {"rejected": 0}},
+                    "fs": {"total": {"available_in_bytes": 800, "total_in_bytes": 1000}},
+                    "jvm": {"mem": {"heap_used_percent": 35}},
+                }
+            }
+        }
+
+    def pending_tasks(self):
+        return {"tasks": []}
+
+
+class FakeNginxClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def collect(self, name=None):
+        return NginxState(name=name, reachable=True, healthy=True, active_connections=3, requests=42, advanced_metrics_available=True)
+
+
+def test_snapshot_collects_api_clients_then_analyzer_recommends(monkeypatch):
+    cli = load_cli()
+    cluster = ClusterState(
+        "multi-node",
+        "wazuh-manager01.local",
+        ("wazuh-manager02.local", "wazuh-manager03.local"),
+        ("wazuh-indexer01.local",),
+        "wazuh-dashboard01.local",
+        "nginx",
+        None,
+        None,
+        "default",
+    )
+    monkeypatch.setattr(cli, "discover_installation", lambda *args, **kwargs: cluster)
+    monkeypatch.setattr(cli, "_wazuh_api_client", lambda cfg: FakeWazuhClient())
+    monkeypatch.setattr(cli, "_indexer_api_client", lambda cfg: FakeIndexerClient())
+    monkeypatch.setattr(cli, "NginxHealthClient", FakeNginxClient)
+    cfg = cli.load_config()
+    cfg = cfg.__class__(**{
+        **cfg.__dict__,
+        "runtime": cfg.runtime.__class__(**{
+            **cfg.runtime.__dict__,
+            "wazuh_api_url": "https://wazuh:55000",
+            "wazuh_api_username": "readonly",
+            "wazuh_api_password": "secret",
+            "indexer_api_url": "https://indexer:9200",
+            "nginx_health_url": "http://nginx/health",
+        }),
+    })
+
+    first = cli._snapshot(cfg)
+    second = cli._snapshot(cfg, first, 10)
+    merged = cli._merge_samples([first, second], cfg)
+    result = cli.analyze(merged, cfg)
+
+    assert second.cluster.cluster_healthy is True
+    assert second.workers[0].events_received == 1400
+    assert second.workers[0].eps == 0
+    assert second.indexer.health_status == "green"
+    assert second.nginx.healthy is True
+    assert merged.workers[0].samples_with_pressure == 2
+    assert result.status == "SCALE_RECOMMENDED"
+    assert result.recommended_next_workers == 3
+    assert result.host_capacity_status == "HOST_CAPACITY_UNKNOWN"

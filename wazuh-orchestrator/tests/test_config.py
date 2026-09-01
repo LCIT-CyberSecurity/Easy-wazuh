@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from wazuh_orchestrator.config import load_config
@@ -71,3 +73,34 @@ def test_wazuh_api_url_must_be_https(tmp_path):
 def test_wazuh_api_timeout_positive(tmp_path):
     with pytest.raises(ConfigurationError, match="wazuh_api_timeout"):
         load_config(write_cfg(tmp_path, "runtime:\n  wazuh_api_timeout_seconds: 0\n"))
+
+
+
+def test_metrics_provider_invalid_refused(tmp_path):
+    with pytest.raises(ConfigurationError, match="metrics_provider"):
+        load_config(write_cfg(tmp_path, "runtime:\n  metrics_provider: docker\n"))
+
+
+def test_indexer_api_url_must_be_https(tmp_path):
+    with pytest.raises(ConfigurationError, match="indexer_api_url"):
+        load_config(write_cfg(tmp_path, "runtime:\n  indexer_api_url: http://indexer:9200\n"))
+
+
+def test_nginx_health_url_must_be_http_url(tmp_path):
+    with pytest.raises(ConfigurationError, match="nginx_health_url"):
+        load_config(write_cfg(tmp_path, "runtime:\n  nginx_health_url: file:///tmp/status\n"))
+
+
+def test_container_compose_example_is_read_only_and_unprivileged():
+    import yaml
+
+    data = yaml.safe_load((Path(__file__).resolve().parents[1] / "docker-compose.yml.example").read_text(encoding="utf-8"))
+    service = data["services"]["wazuh-orchestrator"]
+
+    assert service["user"] == "10001:10001"
+    assert service["read_only"] is True
+    assert "ALL" in service["cap_drop"]
+    assert "no-new-privileges:true" in service["security_opt"]
+    assert service["command"][:2] == ["--config", "/app/config/orchestrator.yaml"]
+    assert all("/var/run/docker.sock" not in volume for volume in service["volumes"])
+    assert all(volume.endswith(":ro") for volume in service["volumes"])

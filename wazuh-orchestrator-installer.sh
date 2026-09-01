@@ -35,16 +35,15 @@ install_native() {
   echo "     $ORCH_DIR/.venv/bin/python $ORCH_DIR/wazuh-orchestrator.py analyze"
   echo "  3. Prepare a dry-run plan:"
   echo "     $ORCH_DIR/.venv/bin/python $ORCH_DIR/wazuh-orchestrator.py plan --workers <target>"
-  echo "  4. Apply manually after reviewing the plan:"
-  echo "     sudo $ORCH_DIR/.venv/bin/python $ORCH_DIR/wazuh-orchestrator.py scale --workers <target>"
+  echo "  4. Apply manually outside the orchestrator if the recommendation is accepted."
   echo ""
-  echo "The scale command asks for explicit confirmation before changing anything."
+  echo "The V1 scale command is disabled and cannot change the stack."
   echo "Use --debug only for troubleshooting."
 }
 
-print_docker_warning() {
-  echo "Container mode may require mounting /var/run/docker.sock later."
-  echo "That socket grants very high privilege over the Docker host."
+print_container_note() {
+  echo "Container mode is read-only in V1 and must not mount /var/run/docker.sock."
+  echo "Configure Wazuh API, Wazuh Indexer API and NGINX health URLs instead."
 }
 
 main() {
@@ -67,7 +66,7 @@ main() {
     read -r -p "Choose installation mode [1/2/3]: " choice
     case "$choice" in
       1)
-        print_docker_warning
+        print_container_note
         echo "Dockerfile is ready. Build is intentionally not run by this installer."
         ;;
       2) install_native ;;

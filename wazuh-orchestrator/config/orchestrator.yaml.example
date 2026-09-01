@@ -35,7 +35,7 @@ safety:
   require_multi_node_for_scaling: true
   require_cluster_healthy: true
   require_nginx_healthy: true
-  require_complete_host_metrics: true
+  require_complete_host_metrics: false
   backup_before_change: true
 
 scale_down:
@@ -54,3 +54,16 @@ runtime:
   wazuh_api_password: null
   wazuh_api_verify_tls: true
   wazuh_api_timeout_seconds: 10
+
+  # Wazuh Indexer API read-only account. Required for indexer pressure diagnostics.
+  indexer_api_url: null
+  indexer_api_username: null
+  indexer_api_password: null
+  indexer_api_verify_tls: true
+  indexer_api_timeout_seconds: 10
+
+  # NGINX read-only health checks. stub_status is optional.
+  nginx_health_url: null
+  nginx_stub_status_url: null
+  nginx_verify_tls: true
+  nginx_timeout_seconds: 5

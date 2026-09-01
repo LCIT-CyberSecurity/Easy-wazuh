@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -13,10 +14,14 @@ SECRET_KEYS = ("password", "token", "secret", "key", "credential")
 
 
 def configure_logging(root: Path, level: str = "INFO") -> None:
-    log_dir = root / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(log_dir / "wazuh-orchestrator.log", maxBytes=1_000_000, backupCount=3)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    try:
+        log_dir = root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler: logging.Handler = RotatingFileHandler(log_dir / "wazuh-orchestrator.log", maxBytes=1_000_000, backupCount=3)
+    except OSError:
+        handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(formatter)
     logging.basicConfig(level=getattr(logging, level.upper()), handlers=[handler], force=True)
 
 

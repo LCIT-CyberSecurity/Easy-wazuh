@@ -1,6 +1,6 @@
 # Easy-Wazuh Orchestrator
 
-Beta manual monitoring tool for Easy-Wazuh multi-node deployments. It analyzes capacity and builds read-only worker scaling plans, but it does not modify the live deployment.
+Read-only diagnostic and sizing recommendation tool for Easy-Wazuh multi-node deployments. It observes Wazuh, Wazuh Indexer and NGINX, detects manager/indexer pressure, and may recommend adding one Wazuh Manager worker. It does not modify the live deployment in V1.
 
 Supported in V1:
 
@@ -8,18 +8,22 @@ Supported in V1:
 - exactly one Wazuh Manager master
 - N Wazuh Manager workers, monitored against baseline and max
 - exactly one Wazuh Dashboard, monitored only
-- Wazuh Indexers monitored only
-- existing Easy-Wazuh NGINX/load balancer only
+- Wazuh Indexers monitored through read-only Indexer APIs
+- existing Easy-Wazuh NGINX/load balancer health checked over HTTP
+- container execution without root and without `/var/run/docker.sock`
+- operation without Docker Engine privileges or Docker CPU/RAM container metrics
 
 Not supported in V1:
 
 - autoscaling
-- live worker scaling from the CLI
+- live worker scaling from the CLI or Python API
 - single-node orchestration or migration to multi-node
 - multi-host orchestration
 - Dashboard horizontal scaling
 - Indexer scaling
 - Dashboard certificate customization
+- privileged Docker socket access
+- host CPU/RAM/IO providers such as Prometheus, Zabbix or Centreon
 
 ## CLI
 
@@ -28,23 +32,23 @@ python3 wazuh-orchestrator.py status
 python3 wazuh-orchestrator.py analyze
 python3 wazuh-orchestrator.py analyze --duration 120
 python3 wazuh-orchestrator.py plan --workers 3
-# Disabled in beta monitoring mode:
+# Disabled in V1:
 # python3 wazuh-orchestrator.py scale --workers 3
 ```
 
 `status` and `analyze` support `--json`. Use global `--debug` to force DEBUG logs for one run; otherwise configure `logging.level` in YAML.
 
-`plan` is the manual read-only check for a possible worker count change. In beta monitoring mode, `scale` is intentionally disabled: it prints the same plan context, exits with an error, and does not prompt for confirmation or modify Docker, NGINX, certificates, transactions, or live infrastructure.
+`analyze --duration` performs repeated metric collection across the requested duration and computes rates such as EPS only when two valid counter samples are available. `plan` is a read-only planning aid for a possible worker count change. In V1, `scale` is intentionally disabled: it exits with an error before backend, Docker, NGINX, certificate, transaction or lock operations can run.
 
 ## Configuration
 
 Copy `config/orchestrator.yaml.example` and adjust thresholds. Defaults are Easy-Wazuh conservative guardrails, not official universal Wazuh sizing recommendations.
 
-The bootstrap persists deployment identity at `/opt/wazuh/easy-wazuh/deployment.yaml`. The orchestrator reads and validates this file, then compares it with actual Compose state. Important drift blocks scaling. Wazuh API credentials are used only for cluster health and join validation and are never printed in CLI output or audit logs.
+The bootstrap persists deployment identity at `/opt/wazuh/easy-wazuh/deployment.yaml`. The orchestrator reads and validates this file, then compares it with declared Compose state when files are available. Runtime health comes from Wazuh API, Wazuh Indexer API and NGINX HTTP checks, not from Docker Engine access. API credentials should be read-only where Wazuh allows it and are never printed in CLI output or audit logs.
 
 ## Local Development
 
-Development and unit tests require no Docker daemon, no Wazuh installation, no root and no Internet. Docker, Wazuh API, NGINX and certificate behavior are mocked or represented by synthetic fixtures.
+Development and unit tests require no Docker daemon, no Wazuh installation, no root and no Internet. Wazuh API, Wazuh Indexer API, NGINX and certificate behavior are mocked or represented by synthetic fixtures.
 
 ```bash
 python3 -m pytest
@@ -59,6 +63,8 @@ Use the existing project virtualenv when the system Python has no pytest install
 
 ## Safety
 
-The orchestrator fails closed. In beta monitoring mode, the CLI does not add or remove workers at all; it only reports status, analysis and read-only plans. The lower-level scaling transaction code remains guarded by topology, naming, metrics, host capacity, cluster health, NGINX health, certificates and transaction state checks for future validation.
+The orchestrator treats missing data as unknown, not healthy. In V1, the CLI and Python `scale()` path do not add or remove workers at all; they only report status, analysis and read-only plans. A manager scale-out recommendation means add one worker and re-evaluate after stabilization, not that scaling will certainly fix the issue.
 
-Real Docker/Wazuh/NGINX/certificate behavior still requires validation on a prepared integration host; see `docs/integration-testing.md`. Do not claim host-level high availability for a single Docker host deployment.
+When host CPU/RAM/IO metrics are not available, the orchestrator can detect Wazuh-side pressure but cannot prove that the current host has enough capacity for another worker. Verify host resources before deploying the worker on the same node. Future providers such as Prometheus, Zabbix or Centreon are intentionally out of scope for V1.
+
+Dashboard certificate customization is outside V1. The orchestrator does not replace Dashboard private keys or Dashboard TLS paths.
