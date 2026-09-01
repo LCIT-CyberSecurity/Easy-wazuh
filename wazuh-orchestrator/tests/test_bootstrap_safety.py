@@ -50,5 +50,6 @@ def test_bootstrap_checks_host_resources_before_package_work():
     assert 'EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE="${EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE:-16}"' in text
     assert 'EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE="${EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE:-50}"' in text
     assert 'EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE="${EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE:-100}"' in text
+    assert 'EASY_WAZUH_RECOMMENDED_DISK_FREE_GB="${EASY_WAZUH_RECOMMENDED_DISK_FREE_GB:-500}"' in text
     assert "EASY_WAZUH_SKIP_RESOURCE_CHECK=yes" in text
     assert text.index('check_host_resources "$WAZUH_DIR"') < text.index("apt update")

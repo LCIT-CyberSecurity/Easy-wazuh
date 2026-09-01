@@ -105,14 +105,14 @@ For a PoC expected to evolve with more agents, longer retention, or heavier even
 ```text
 CPU:      8 vCPU or more
 RAM:      16 to 32 GB
-Disk:     200 GB or more, preferably SSD/NVMe
+Disk:     500 GB or more, preferably SSD/NVMe
 OS:       Debian 13, 64-bit
 Network:  Static IP address and DNS record
 ```
 
 The official Wazuh Docker documentation gives the baseline for a single-node stack as 4 CPU cores, 8 GB RAM, and 50 GB disk. Plan more disk space if you keep logs and security events for a long time. These profiles are PoC-oriented starting points, not production sizing guidance.
 
-The installer performs a preflight resource check before package installation, Docker pulls, certificate generation, or Compose startup. Defaults are 2 vCPU minimum with a warning below 4 vCPU, 8 GB RAM and 50 GB free disk for single-node, and 2 vCPU minimum with a warning below 4 vCPU, 16 GB RAM and 100 GB free disk for multi-node. These are minimum guardrails; the recommended multi-node lab profile above remains 200 GB or more. For exceptional lab troubleshooting only, override with `EASY_WAZUH_SKIP_RESOURCE_CHECK=yes` or adjust `EASY_WAZUH_MIN_VCPU`, `EASY_WAZUH_RECOMMENDED_VCPU`, `EASY_WAZUH_MIN_MEMORY_GB_SINGLE_NODE`, `EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE`, `EASY_WAZUH_MIN_MEMORY_GB`, `EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE`, `EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE`, or `EASY_WAZUH_MIN_DISK_FREE_GB`.
+The installer performs a preflight resource check before package installation, Docker pulls, certificate generation, or Compose startup. Defaults are 2 vCPU minimum with a warning below 4 vCPU, 8 GB RAM and 50 GB free disk for single-node, and 2 vCPU minimum with a warning below 4 vCPU, 16 GB RAM and 100 GB free disk for multi-node, with a disk warning below 500 GB. These are minimum guardrails; the recommended multi-node lab profile above remains 500 GB or more when retention or alert volume is uncertain. For exceptional lab troubleshooting only, override with `EASY_WAZUH_SKIP_RESOURCE_CHECK=yes` or adjust `EASY_WAZUH_MIN_VCPU`, `EASY_WAZUH_RECOMMENDED_VCPU`, `EASY_WAZUH_MIN_MEMORY_GB_SINGLE_NODE`, `EASY_WAZUH_MIN_MEMORY_GB_MULTI_NODE`, `EASY_WAZUH_MIN_MEMORY_GB`, `EASY_WAZUH_MIN_DISK_FREE_GB_SINGLE_NODE`, `EASY_WAZUH_MIN_DISK_FREE_GB_MULTI_NODE`, `EASY_WAZUH_MIN_DISK_FREE_GB`, or `EASY_WAZUH_RECOMMENDED_DISK_FREE_GB`.
 
 ## Official documentation
 
