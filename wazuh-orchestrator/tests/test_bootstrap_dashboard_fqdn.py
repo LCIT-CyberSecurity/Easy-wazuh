@@ -32,11 +32,19 @@ def test_default_dashboard_fqdn_uses_wazuh_home_lan():
     assert run_bash('WAZUH_PUBLIC_DNS_SUFFIX=""; WAZUH_INTERNAL_DNS_SUFFIX="home.lan"; default_dashboard_fqdn "VM-Openvas.home.lan"') == "wazuh.home.lan"
 
 
-def test_default_dashboard_fqdn_uses_wazuh_sec_lan():
+def test_default_dashboard_fqdn_uses_internal_suffix_when_selected():
     assert run_bash('WAZUH_PUBLIC_DNS_SUFFIX=""; WAZUH_INTERNAL_DNS_SUFFIX="sec.lan"; default_dashboard_fqdn "VM-Openvas.home.lan"') == "wazuh.sec.lan"
 
 
-def test_default_dashboard_fqdn_does_not_use_detected_hostname_with_different_suffix():
+def test_default_dashboard_fqdn_falls_back_to_host_domain():
+    assert run_bash('WAZUH_PUBLIC_DNS_SUFFIX=""; WAZUH_INTERNAL_DNS_SUFFIX=""; default_dashboard_fqdn "VM-Openvas.home.lan"') == "wazuh.home.lan"
+
+
+def test_default_dashboard_fqdn_uses_public_suffix_override():
+    assert run_bash('WAZUH_PUBLIC_DNS_SUFFIX="sec.lan"; WAZUH_INTERNAL_DNS_SUFFIX="internal.lan"; default_dashboard_fqdn "VM-Openvas.home.lan"') == "wazuh.sec.lan"
+
+
+def test_default_dashboard_fqdn_does_not_use_detected_hostname():
     assert run_bash('WAZUH_PUBLIC_DNS_SUFFIX=""; WAZUH_INTERNAL_DNS_SUFFIX="sec.lan"; default_dashboard_fqdn "VM-Openvas.home.lan"') != "VM-Openvas.home.lan"
 
 
